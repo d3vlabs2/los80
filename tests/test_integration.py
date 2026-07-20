@@ -1,3 +1,5 @@
+import importlib.util
+import shutil
 from pathlib import Path
 
 import pytest
@@ -7,7 +9,14 @@ from los80.database import JobDatabase
 from los80.pipeline import Pipeline
 
 
-@pytest.mark.skipif(not Path('/usr/bin/ffmpeg').exists() or not Path('/usr/bin/ffprobe').exists(), reason='ffmpeg/ffprobe not installed')
+REQUIRED_BINARIES = ("ffmpeg", "ffprobe", "realesrgan-ncnn-vulkan")
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("faster_whisper") is None
+    or any(shutil.which(binary) is None for binary in REQUIRED_BINARIES),
+    reason="full pipeline dependencies are not installed",
+)
 def test_full_pipeline_runs_with_real_dependencies(tmp_path: Path) -> None:
     input_dir = tmp_path / 'input'
     output_dir = tmp_path / 'output'

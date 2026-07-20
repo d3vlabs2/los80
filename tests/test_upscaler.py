@@ -29,7 +29,9 @@ def test_upscaler_skips_existing_intermediate(tmp_path: Path) -> None:
     assert output_path.read_bytes() == b"already"
 
 
-def test_pipeline_resumes_upscaling_from_existing_intermediate(tmp_path: Path) -> None:
+def test_pipeline_resumes_upscaling_from_existing_intermediate(
+    tmp_path: Path, monkeypatch
+) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir(parents=True)
     video_path = input_dir / "clip.mp4"
@@ -49,6 +51,8 @@ def test_pipeline_resumes_upscaling_from_existing_intermediate(tmp_path: Path) -
         reports_dir=str(tmp_path / "reports"),
         database_path=str(tmp_path / "jobs.sqlite"),
         max_retries=1,
+        include_subtitles=False,
+        include_translation=False,
     )
     database = JobDatabase(config.database_path)
     database.add_job("clip.mp4", str(video_path))
@@ -56,7 +60,26 @@ def test_pipeline_resumes_upscaling_from_existing_intermediate(tmp_path: Path) -
     database.mark_stage("clip.mp4", "upscaling", "completed", "existing")
 
     pipeline = Pipeline(config, database)
-    pipeline.upscaler.backend_cls = FakeBackend
+
+    class FakeEncoderBackend:
+        def detect_hardware_encoder(self, preference: str = "auto") -> str:
+            return "libx265"
+
+    monkeypatch.setattr(
+        pipeline.upscaler,
+        "upscale",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("completed upscaling stage should be skipped")
+        ),
+    )
+
+    def encode(input_path: Path, output_path: Path, options: dict) -> Path:
+        output_path.write_bytes(b"encoded")
+        return output_path
+
+    monkeypatch.setattr(pipeline.encoder, "encode", encode)
+    pipeline.encoder.backend_cls = FakeEncoderBackend
+    monkeypatch.setattr(pipeline.validator, "validate", lambda *args, **kwargs: None)
     pipeline.run()
 
     assert database.get_stages("clip.mp4")["upscaling"] == "completed"

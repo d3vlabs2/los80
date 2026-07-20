@@ -31,12 +31,21 @@ def test_detect_hardware_encoder_prefers_hevc(monkeypatch) -> None:
     assert backend.detect_hardware_encoder() == "hevc_nvenc"
 
 
-def test_encoder_falls_back_to_libx265(monkeypatch) -> None:
+def test_encoder_falls_back_to_libx265(tmp_path: Path, monkeypatch) -> None:
     backend = FFmpegBackend()
     monkeypatch.setattr(backend, "detect_hardware_encoder", lambda: "libx265")
     monkeypatch.setattr("los80.encoder.shutil.which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
-    monkeypatch.setattr("los80.encoder.subprocess.run", lambda *args, **kwargs: type("Result", (), {"returncode": 0})())
-    output = backend.encode(Path("/tmp/input.mp4"), Path("/tmp/out.mp4"), {"codec": "libx265", "hardware_preference": "auto"})
+
+    def successful_ffmpeg(command, **kwargs):
+        Path(command[-1]).write_bytes(b"encoded")
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("los80.encoder.subprocess.run", successful_ffmpeg)
+    output = backend.encode(
+        tmp_path / "input.mp4",
+        tmp_path / "out.mp4",
+        {"codec": "libx265", "hardware_preference": "auto"},
+    )
     assert output.exists()
 
 
@@ -46,7 +55,9 @@ def test_validation_failure_when_output_missing(tmp_path: Path) -> None:
         validator.validate(tmp_path / "source.mp4", tmp_path / "missing.mp4", tmp_path / "es.srt", tmp_path / "en.srt")
 
 
-def test_pipeline_skips_encoding_for_completed_stage(tmp_path: Path) -> None:
+def test_pipeline_skips_encoding_for_completed_stage(
+    tmp_path: Path, monkeypatch
+) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir(parents=True)
     video_path = input_dir / "clip.mp4"
@@ -58,14 +69,36 @@ def test_pipeline_skips_encoding_for_completed_stage(tmp_path: Path) -> None:
     (output_dir / "clip.es.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nHola\n", encoding="utf-8")
     (output_dir / "clip.en.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
 
-    config = AppConfig(input_dir=str(input_dir), output_dir=str(output_dir), archive_dir=str(tmp_path / "archive"), working_dir=str(tmp_path / "working"), reports_dir=str(tmp_path / "reports"), database_path=str(tmp_path / "jobs.sqlite"))
+    config = AppConfig(
+        input_dir=str(input_dir),
+        output_dir=str(output_dir),
+        archive_dir=str(tmp_path / "archive"),
+        working_dir=str(tmp_path / "working"),
+        reports_dir=str(tmp_path / "reports"),
+        database_path=str(tmp_path / "jobs.sqlite"),
+        include_subtitles=False,
+        include_translation=False,
+    )
     database = JobDatabase(config.database_path)
     database.add_job("clip.mp4", str(video_path))
     database.mark_stage("clip.mp4", "scan", "completed", "discovered")
     database.mark_stage("clip.mp4", "encoding", "completed", "existing")
 
     pipeline = Pipeline(config, database)
-    pipeline.encoder.backend_cls = FakeBackend
+    monkeypatch.setattr(
+        pipeline.upscaler,
+        "upscale",
+        lambda input_path, output_path, options: output_path.write_bytes(b"upscaled")
+        or output_path,
+    )
+    monkeypatch.setattr(
+        pipeline.encoder,
+        "encode",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("completed encoding stage should be skipped")
+        ),
+    )
+    monkeypatch.setattr(pipeline.validator, "validate", lambda *args, **kwargs: None)
     pipeline.run()
 
     assert database.get_stages("clip.mp4")["encoding"] == "completed"

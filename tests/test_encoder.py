@@ -47,7 +47,9 @@ def test_validation_requires_expected_codec(tmp_path: Path) -> None:
         raise AssertionError("Expected validation failure")
 
 
-def test_pipeline_resumes_encoding_from_existing_output(tmp_path: Path) -> None:
+def test_pipeline_resumes_encoding_from_existing_output(
+    tmp_path: Path, monkeypatch
+) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir(parents=True)
     video_path = input_dir / "clip.mp4"
@@ -67,6 +69,8 @@ def test_pipeline_resumes_encoding_from_existing_output(tmp_path: Path) -> None:
         working_dir=str(tmp_path / "working"),
         reports_dir=str(tmp_path / "reports"),
         database_path=str(tmp_path / "jobs.sqlite"),
+        include_subtitles=False,
+        include_translation=False,
     )
     database = JobDatabase(config.database_path)
     database.add_job("clip.mp4", str(video_path))
@@ -74,7 +78,20 @@ def test_pipeline_resumes_encoding_from_existing_output(tmp_path: Path) -> None:
     database.mark_stage("clip.mp4", "encoding", "completed", "existing")
 
     pipeline = Pipeline(config, database)
-    pipeline.encoder.backend_cls = FakeBackend
+    monkeypatch.setattr(
+        pipeline.upscaler,
+        "upscale",
+        lambda input_path, output_path, options: output_path.write_bytes(b"upscaled")
+        or output_path,
+    )
+    monkeypatch.setattr(
+        pipeline.encoder,
+        "encode",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("completed encoding stage should be skipped")
+        ),
+    )
+    monkeypatch.setattr(pipeline.validator, "validate", lambda *args, **kwargs: None)
     pipeline.run()
 
     assert database.get_stages("clip.mp4")["encoding"] == "completed"
