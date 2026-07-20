@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "los80"
+version = "0.1.0"
+description = "AI-powered batch video restoration pipeline"
+requires-python = ">=3.10"
+dependencies = [
+  "PyYAML>=6.0",
+  "faster-whisper>=1.0.0",
+  "pytest>=8.0",
+]
+
+[project.scripts]
+los80 = "los80.run:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

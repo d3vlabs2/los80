@@ -1,0 +1,2 @@
+[console_scripts]
+los80 = los80.run:main
