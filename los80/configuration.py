@@ -7,6 +7,9 @@ from typing import Any
 import yaml
 
 
+DEFAULT_CONFIG_PATH = Path("config/config.yaml")
+
+
 @dataclass
 class AppConfig:
     input_dir: str = "./input"
@@ -73,7 +76,13 @@ class AppConfig:
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
-    config_path = Path(path) if path is not None else Path("config.yaml")
+    """Load LOS80 settings from YAML.
+
+    ``config/config.yaml`` is the canonical project configuration. Passing an
+    explicit path remains supported for callers that manage their own config
+    location.
+    """
+    config_path = Path(path) if path is not None else DEFAULT_CONFIG_PATH
     config = AppConfig()
     if config_path.exists():
         with config_path.open("r", encoding="utf-8") as handle:

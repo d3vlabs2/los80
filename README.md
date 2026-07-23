@@ -13,6 +13,7 @@ LOS80 is a production-style Python pipeline for batch video restoration. It scan
 
 ## Project layout
 
+- config/config.yaml: canonical YAML configuration
 - los80/configuration.py: YAML configuration loading
 - los80/scanner.py: recursive video discovery
 - los80/database.py: SQLite job persistence and stage tracking
@@ -34,7 +35,7 @@ LOS80 is a production-style Python pipeline for batch video restoration. It scan
 python3 -m pip install --user --break-system-packages faster-whisper
 ```
 
-2. Create or edit config.yaml and choose a Whisper model such as `tiny`, `base`, `small`, `medium`, or `large-v3`:
+2. Edit `config/config.yaml` and choose a Whisper model such as `tiny`, `base`, `small`, `medium`, or `large-v3`:
 
 ```yaml
 whisper_model: base
@@ -48,7 +49,7 @@ whisper_compute_type: int8
 python3 -m pip install --user --break-system-packages realesrgan
 ```
 
-4. Configure the upscaling block in config.yaml:
+4. Configure the upscaling block in `config/config.yaml`:
 
 ```yaml
 upscaler_model: RealESRGAN_x4plus
@@ -68,7 +69,14 @@ For GPU acceleration, install a CUDA-compatible build of the backend and set `wh
 6. Run:
 
 ```bash
-python3 run.py --config config.yaml
+los80
+```
+
+The CLI uses `config/config.yaml` by default. An explicit path remains
+available for compatibility with existing automation:
+
+```bash
+los80 --config config/config.yaml
 ```
 
 ## Google Drive integration
@@ -91,7 +99,7 @@ Install the Google client library:
 python3 -m pip install --user --break-system-packages google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
 ```
 
-Add the following values to config.yaml:
+Add the following values to `config/config.yaml`:
 
 ```yaml
 drive_enabled: true
@@ -121,7 +129,7 @@ In Colab, install the client libraries and set the OAuth flow to use the Colab h
 !pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
 ```
 
-Then enable the Drive integration in config.yaml:
+Then enable the Drive integration in `config/config.yaml`:
 
 ```yaml
 drive_enabled: true

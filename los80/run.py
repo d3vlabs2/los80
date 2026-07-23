@@ -3,14 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 import argparse
 
-from los80.configuration import load_config
+from los80.configuration import DEFAULT_CONFIG_PATH, load_config
 from los80.database import JobDatabase
 from los80.scanner import scan_videos
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the LOS80 batch pipeline")
-    parser.add_argument("--config", type=Path, default=Path("config.yaml"), help="Path to a YAML configuration file")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help=f"Path to a YAML configuration file (default: {DEFAULT_CONFIG_PATH})",
+    )
     return parser
 
 

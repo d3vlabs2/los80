@@ -1,0 +1,140 @@
+# LOS80 configuration
+# Paths may be absolute local paths or mounted Google Drive paths in Colab.
+
+# General pipeline behavior.
+general:
+  # Human-readable name used to identify this pipeline configuration.
+  project_name: "LOS80"
+  # Execution target; supported values are "local" and "colab".
+  execution_environment: "local"
+  # Process videos found inside nested INPUT directories when true.
+  recursive_scan: true
+  # Skip files already recorded as completed or detected as duplicates when true.
+  duplicate_detection: true
+  # Continue incomplete jobs from the database after an interruption when true.
+  resume: true
+
+# Working folders. Change these paths to match the local or mounted Drive layout.
+google_drive:
+  # Directory containing source videos waiting to be processed.
+  input: "/content/drive/MyDrive/LOS80/INPUT"
+  # Directory receiving successfully restored videos and subtitle files.
+  output: "/content/drive/MyDrive/LOS80/OUTPUT"
+  # Directory receiving original videos after successful processing.
+  archive: "/content/drive/MyDrive/LOS80/ARCHIVE"
+  # Directory used for persistent pipeline log files.
+  logs: "/content/drive/MyDrive/LOS80/LOGS"
+  # Directory used for generated HTML, JSON, and CSV reports.
+  reports: "/content/drive/MyDrive/LOS80/REPORTS"
+  # Directory used for intermediate files created during processing.
+  temp: "/content/LOS80_TEMP"
+
+# SQLite job-tracking database settings.
+database:
+  # Path to the SQLite database file that stores job and resume state.
+  path: "/content/drive/MyDrive/LOS80/los80.sqlite3"
+  # SQLite busy timeout in seconds before a locked operation fails.
+  timeout_seconds: 30
+
+# Faster-Whisper subtitle-generation settings.
+whisper:
+  # Faster-Whisper model name or path available in the execution environment.
+  model: "medium"
+  # Device used for inference; supported values are "auto", "cpu", and "cuda".
+  device: "auto"
+  # Inference precision; supported values are "auto", "int8", "float16", and "float32".
+  compute_type: "auto"
+  # Source language code used to generate Spanish subtitles.
+  language: "es"
+  # Number of candidate sequences considered during transcription.
+  beam_size: 5
+
+# English subtitle-translation settings.
+translation:
+  # Enable translation of generated Spanish subtitles when true.
+  enabled: true
+  # Language code of the generated Spanish subtitle track.
+  source_language: "es"
+  # Language code of the translated English subtitle track.
+  target_language: "en"
+
+# AI video-upscaling settings.
+ai_upscaling:
+  # Enable AI upscaling as part of the restoration pipeline when true.
+  enabled: true
+  # Requested maximum output width in pixels.
+  target_width: 3840
+  # Requested maximum output height in pixels.
+  target_height: 2160
+  # Number of frames processed together by the configured upscaler.
+  batch_size: 1
+
+# FFmpeg H.265 encoding settings.
+ffmpeg:
+  # FFmpeg executable name or absolute path.
+  binary: "ffmpeg"
+  # H.265 video encoder passed to FFmpeg.
+  video_codec: "libx265"
+  # Constant Rate Factor; lower values generally produce higher quality and larger files.
+  crf: 20
+  # Encoder speed and compression preset.
+  preset: "slow"
+  # Audio codec used in the restored output file.
+  audio_codec: "aac"
+  # Audio bitrate used by the selected audio codec.
+  audio_bitrate: "192k"
+
+# Final output and validation settings.
+output:
+  # Container extension used for restored video files, without a leading dot.
+  container: "mp4"
+  # Text appended to the source stem to form the restored filename.
+  filename_suffix: "_restored"
+  # Preserve the source directory hierarchy beneath OUTPUT when true.
+  preserve_directory_structure: true
+  # Validate completed outputs before archiving their source files when true.
+  validate: true
+  # Replace an existing output file with the same path when true.
+  overwrite: false
+
+# Retry behavior for failed processing jobs.
+retry:
+  # Maximum number of attempts allowed for one job, including the first attempt.
+  max_attempts: 3
+  # Delay in seconds before the first retry.
+  initial_delay_seconds: 30
+  # Multiplier applied to the delay after each failed attempt.
+  backoff_multiplier: 2.0
+
+# Console and file logging settings.
+logging:
+  # Minimum severity recorded; supported values are DEBUG, INFO, WARNING, ERROR, and CRITICAL.
+  level: "INFO"
+  # Log filename created inside the configured LOGS directory.
+  filename: "los80.log"
+  # Write log records to the console when true.
+  console: true
+  # Write log records to the configured log file when true.
+  file: true
+
+# Processing dashboard settings.
+dashboard:
+  # Enable the processing dashboard when true.
+  enabled: true
+  # Dashboard bind address; use 127.0.0.1 for local-only access.
+  host: "127.0.0.1"
+  # TCP port used by the dashboard.
+  port: 8080
+  # Dashboard refresh interval in seconds.
+  refresh_interval_seconds: 5
+
+# Processing report settings.
+reports:
+  # Generate a human-readable HTML report when true.
+  html: true
+  # Generate a structured JSON report when true.
+  json: true
+  # Generate a tabular CSV report when true.
+  csv: true
+  # Base filename used for generated reports.
+  filename_prefix: "los80_report"
