@@ -56,6 +56,12 @@ whisper_compute_type: int8
    `~/.cache/los80/realesrgan` (or `/content/.cache/los80/realesrgan` in Colab).
    Run `los80 doctor` to install it early and verify the runtime.
 
+   Video upscaling is frame-based: LOS80 extracts timestamped PNG frames,
+   processes resumable batches across available GPUs, and remuxes the result
+   with the source audio, subtitles, chapters, metadata, aspect ratio, and
+   color tags. Temporary frames are removed after a successful remux and kept
+   after an interruption so the next run can resume.
+
 4. Configure the upscaling block in `config/config.yaml`:
 
 ```yaml
