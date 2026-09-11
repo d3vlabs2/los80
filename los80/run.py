@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import logging
 
 from los80.configuration import DEFAULT_CONFIG_PATH, load_config
 from los80.database import JobDatabase
@@ -9,6 +10,7 @@ from los80.scanner import scan_videos
 from los80.analysis import MediaAnalyzer, source_fingerprint
 from los80.performance import profile_action
 from los80.realesrgan_runtime import RealESRGANRuntime, RealESRGANRuntimeError
+from los80.pipeline import Pipeline
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,6 +51,18 @@ def main() -> None:
         except RealESRGANRuntimeError as exc:
             raise SystemExit(f"Real-ESRGAN startup check failed: {exc}") from exc
     database = JobDatabase(config.database_path)
+
+    if args.command is None:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        summary = Pipeline(config, database).run()
+        elapsed = float(summary.get("elapsed_time", 0.0))
+        print("\nLOS80 processing summary")
+        print(f"completed: {summary.get('completed', 0)}")
+        print(f"skipped: {summary.get('skipped', 0)}")
+        print(f"failed: {summary.get('failed', 0)}")
+        print(f"elapsed time: {elapsed:.2f}s")
+        return
+
     analyzer = MediaAnalyzer()
 
     if args.command == "profile":
@@ -94,7 +108,6 @@ def main() -> None:
             database.mark_stage(source_name, "analysis", "completed", details="analyzed")
             print(f"Analyzed {source_name} (quality={result['quality_score']})")
             continue
-        print(f"Queued {source_name} (job_id={job_id})")
 
 
 if __name__ == "__main__":

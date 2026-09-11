@@ -133,9 +133,29 @@ class JobDatabase:
                 """,
                 (job_id, stage_name, status, details),
             )
+            if status in {"in_progress", "retrying"}:
+                job_status = "processing"
+            elif status == "failed":
+                job_status = "failed"
+            elif stage_name == "completed" and status == "completed":
+                job_status = "completed"
+            else:
+                job_status = None
+            if job_status is not None:
+                conn.execute(
+                    "UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (job_status, job_id),
+                )
+            conn.commit()
+
+    def mark_job_status(self, source_name: str, status: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            job_id = self._get_job_id(conn, source_name)
+            if job_id is None:
+                raise ValueError(f"Job {source_name} not found")
             conn.execute(
                 "UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                ("processing" if status in {"in_progress", "retrying"} else "completed", job_id),
+                (status, job_id),
             )
             conn.commit()
 
