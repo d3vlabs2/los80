@@ -17,6 +17,11 @@ class UpscalingError(RuntimeError):
 
 
 class RealESRGANBackend:
+    _UNSUPPORTED_OPTIONS = ("tile_padding", "denoise", "sharpen", "face_enhance", "deinterlace")
+
+    def __init__(self, logger: Optional[logging.Logger] = None) -> None:
+        self.logger = logger or logging.getLogger("los80.upscaler.ncnn")
+
     def upscale(self, input_path: Path, output_path: Path, config: dict[str, object]) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -36,6 +41,7 @@ class RealESRGANBackend:
                    if not (runtime.model_dir / f"{model_name}{suffix}").is_file()]
         if missing:
             raise UpscalingError("Required model files are missing: " + ", ".join(map(str, missing)))
+        self._warn_unsupported_options(config)
 
         work_dir = output_path.parent / f".{output_path.name}.realesrgan-frames"
         source_frames = work_dir / "source"
@@ -115,14 +121,40 @@ class RealESRGANBackend:
                 os.link(frame, target)
             except OSError:
                 shutil.copy2(frame, target)
-        command = [str(executable), "-i", str(batch_dir), "-o", str(output_dir),
-                   "-m", str(model_dir), "-n", model_name, "-f", "png"]
-        if config.get("tile_size"):
+        command = self._build_ncnn_command(
+            executable, batch_dir, output_dir, model_dir, model_name, gpu_id, config,
+        )
+        self._run(command, f"upscale frame batch {batch_number + 1}")
+        shutil.rmtree(batch_dir)
+
+    @staticmethod
+    def _build_ncnn_command(executable: Path, input_dir: Path, output_dir: Path,
+                            model_dir: Path, model_name: str, gpu_id: int | None,
+                            config: dict[str, object]) -> list[str]:
+        command = [
+            str(executable), "-i", str(input_dir), "-o", str(output_dir),
+            "-m", str(model_dir), "-n", model_name,
+        ]
+        if config.get("scale") is not None:
+            command.extend(["-s", str(config["scale"])])
+        if config.get("tile_size") is not None:
             command.extend(["-t", str(config["tile_size"])])
         if gpu_id is not None:
             command.extend(["-g", str(gpu_id)])
-        self._run(command, f"upscale frame batch {batch_number + 1}")
-        shutil.rmtree(batch_dir)
+        command.extend(["-f", str(config.get("output_format", "png"))])
+        if config.get("verbose"):
+            command.append("-v")
+        return command
+
+    def _warn_unsupported_options(self, config: dict[str, object]) -> None:
+        for option in self._UNSUPPORTED_OPTIONS:
+            value = config.get(option)
+            if value not in (None, False, 0, "", "0"):
+                self.logger.warning(
+                    "Ignoring unsupported Real-ESRGAN NCNN option %s=%r; "
+                    "the value remains available to other upscaler backends",
+                    option, value,
+                )
 
     @staticmethod
     def _run(command: list[str], operation: str) -> None:
@@ -191,7 +223,7 @@ class AIUpscaler:
             self.logger.info("Using existing upscaled intermediate %s", output_file)
             return output_file
 
-        backend = self.backend_cls()
+        backend = self.backend_cls(self.logger) if self.backend_cls is RealESRGANBackend else self.backend_cls()
         if hasattr(backend, "upscale"):
             self.logger.info("Using %s backend", self.backend_cls.__name__)
             return backend.upscale(input_path, output_file, config or {})

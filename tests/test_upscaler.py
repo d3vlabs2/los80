@@ -98,7 +98,7 @@ def _runtime(tmp_path: Path) -> RuntimeInfo:
     return RuntimeInfo(executable, models, "test", tmp_path)
 
 
-def test_frame_pipeline_batches_remuxes_tracks_and_cleans_up(tmp_path: Path, monkeypatch) -> None:
+def test_frame_pipeline_batches_remuxes_tracks_and_cleans_up(tmp_path: Path, monkeypatch, caplog) -> None:
     runtime = _runtime(tmp_path)
     monkeypatch.setattr("los80.upscaler.RealESRGANRuntime.ensure", lambda self: runtime)
     monkeypatch.setattr("los80.upscaler.shutil.which", lambda name: f"/usr/bin/{name}")
@@ -126,16 +126,47 @@ def test_frame_pipeline_batches_remuxes_tracks_and_cleans_up(tmp_path: Path, mon
 
     monkeypatch.setattr("los80.upscaler.subprocess.run", run)
     output = tmp_path / "clip.upscaled.mp4"
-    RealESRGANBackend().upscale(tmp_path / "clip.mp4", output, {"batch_size": 2})
+    config = {
+        "batch_size": 2, "scale": 4, "tile_size": 128, "output_format": "png",
+        "verbose": True, "tile_padding": 10, "denoise": True, "sharpen": True,
+    }
+    with caplog.at_level("WARNING"):
+        RealESRGANBackend().upscale(tmp_path / "clip.mp4", output, config)
 
     ncnn = [command for command in commands if command[0] == str(runtime.executable)]
     remux = [command for command in commands if command[0] == "ffmpeg" and "-frame_pts" not in command][0]
     assert len(ncnn) == 2
+    for command in ncnn:
+        assert command[command.index("-s") + 1] == "4"
+        assert command[command.index("-t") + 1] == "128"
+        assert command[command.index("-f") + 1] == "png"
+        assert "-v" in command
+        assert "-p" not in command and "-dn" not in command
+        assert "-g" not in command
+    assert "tile_padding=10" in caplog.text
+    assert "denoise=True" in caplog.text
+    assert "sharpen=True" in caplog.text
     assert ["-map", "1:a?"] == remux[remux.index("-map", remux.index("-map") + 1):][:2]
     assert "1:s?" in remux
     assert "-map_metadata" in remux and "-map_chapters" in remux
     assert "setsar=4:3" in remux and "bt709" in remux
     assert not (tmp_path / ".clip.upscaled.mp4.realesrgan-frames").exists()
+
+
+def test_ncnn_v025_command_uses_only_supported_mapped_options(tmp_path: Path) -> None:
+    command = RealESRGANBackend._build_ncnn_command(
+        tmp_path / "realesrgan-ncnn-vulkan", tmp_path / "input", tmp_path / "output",
+        tmp_path / "models", "realesrgan-x4plus", 2,
+        {"scale": 4, "tile_size": 256, "output_format": "jpg", "verbose": True,
+         "tile_padding": 10, "denoise": True, "sharpen": True},
+    )
+
+    assert command == [
+        str(tmp_path / "realesrgan-ncnn-vulkan"),
+        "-i", str(tmp_path / "input"), "-o", str(tmp_path / "output"),
+        "-m", str(tmp_path / "models"), "-n", "realesrgan-x4plus",
+        "-s", "4", "-t", "256", "-g", "2", "-f", "jpg", "-v",
+    ]
 
 
 def test_frame_pipeline_resumes_missing_frames_and_uses_multiple_gpus(tmp_path: Path, monkeypatch) -> None:

@@ -49,6 +49,9 @@ class AppConfig:
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
     upscaler_model: str = "RealESRGAN_x4plus"
+    upscaler_scale: int = 4
+    upscaler_output_format: str = "png"
+    upscaler_verbose: bool = False
     realesrgan_backend_path: str | None = None
     target_width: int = 3840
     target_height: int = 2160
@@ -120,6 +123,14 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         ai_upscaling = raw.get("ai_upscaling", {})
         if isinstance(ai_upscaling, dict) and "backend_path" in ai_upscaling:
             config.realesrgan_backend_path = ai_upscaling["backend_path"]
+        if isinstance(ai_upscaling, dict):
+            for yaml_key, attribute in {
+                "scale": "upscaler_scale",
+                "output_format": "upscaler_output_format",
+                "verbose": "upscaler_verbose",
+            }.items():
+                if yaml_key in ai_upscaling:
+                    setattr(config, attribute, ai_upscaling[yaml_key])
         translation = raw.get("translation", {})
         if isinstance(translation, dict):
             for yaml_key, attribute in {

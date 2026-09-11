@@ -69,6 +69,10 @@ ai_upscaling:
   # Optional executable or extracted runtime directory. Leave null to use the
   # managed cache (~/.cache locally or /content/.cache in Google Colab).
   backend_path: null
+  # Options supported by the Real-ESRGAN NCNN v0.2.5.0 executable.
+  scale: 4
+  output_format: "png"
+  verbose: false
   # Requested maximum output width in pixels.
   target_width: 3840
   # Requested maximum output height in pixels.

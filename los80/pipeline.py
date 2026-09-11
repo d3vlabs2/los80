@@ -186,6 +186,9 @@ class Pipeline:
                 upscaler_config = {
                     "backend_path": getattr(self.config, "realesrgan_backend_path", None),
                     "model": recommendations.get("model", getattr(self.config, "upscaler_model", "RealESRGAN_x4plus")),
+                    "scale": getattr(self.config, "upscaler_scale", 4),
+                    "output_format": getattr(self.config, "upscaler_output_format", "png"),
+                    "verbose": getattr(self.config, "upscaler_verbose", False),
                     "target_width": getattr(self.config, "target_width", 3840),
                     "target_height": getattr(self.config, "target_height", 2160),
                     "tile_size": recommendations.get("tile_size", getattr(self.config, "tile_size", 0)),
