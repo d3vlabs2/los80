@@ -172,6 +172,7 @@ class Pipeline:
                 "deinterlace": recommendations.get("deinterlace", False),
             }
             upscaler_config = {
+                "backend_path": getattr(self.config, "realesrgan_backend_path", None),
                 "model": recommendations.get("model", getattr(self.config, "upscaler_model", "RealESRGAN_x4plus")),
                 "target_width": getattr(self.config, "target_width", 3840),
                 "target_height": getattr(self.config, "target_height", 2160),

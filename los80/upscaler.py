@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from los80.realesrgan_runtime import RealESRGANRuntime, RealESRGANRuntimeError
+
 
 class UpscalingError(RuntimeError):
     pass
@@ -14,13 +16,27 @@ class UpscalingError(RuntimeError):
 class RealESRGANBackend:
     def upscale(self, input_path: Path, output_path: Path, config: dict[str, object]) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        binary = shutil.which("realesrgan-ncnn-vulkan") or shutil.which("realesrgan")
-        if not binary:
-            raise UpscalingError("Real-ESRGAN is not installed or not available on PATH")
+        try:
+            runtime = RealESRGANRuntime(config.get("backend_path")).ensure()
+        except RealESRGANRuntimeError as exc:
+            raise UpscalingError(str(exc)) from exc
 
-        command = [binary, "-i", str(input_path), "-o", str(output_path)]
+        command = [str(runtime.executable), "-i", str(input_path), "-o", str(output_path), "-m", str(runtime.model_dir)]
         if config.get("model"):
-            command.extend(["-m", str(config["model"])])
+            model_name = str(config["model"])
+            if model_name == "RealESRGAN_x4plus":
+                model_name = "realesrgan-x4plus"
+            missing = [
+                runtime.model_dir / f"{model_name}{suffix}"
+                for suffix in (".bin", ".param")
+                if not (runtime.model_dir / f"{model_name}{suffix}").is_file()
+            ]
+            if missing:
+                raise UpscalingError(
+                    f"Required model files for {model_name} are missing: "
+                    + ", ".join(str(path) for path in missing)
+                )
+            command.extend(["-n", model_name])
         if config.get("tile_size"):
             command.extend(["-t", str(config["tile_size"])])
         if config.get("tile_padding"):

@@ -46,6 +46,7 @@ class AppConfig:
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
     upscaler_model: str = "RealESRGAN_x4plus"
+    realesrgan_backend_path: str | None = None
     target_width: int = 3840
     target_height: int = 2160
     tile_size: int = 0
@@ -111,4 +112,9 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         for key, value in raw.items():
             if hasattr(config, key):
                 setattr(config, key, value)
+        # The canonical documented configuration groups this setting with AI
+        # upscaling, while flat files remain supported for compatibility.
+        ai_upscaling = raw.get("ai_upscaling", {})
+        if isinstance(ai_upscaling, dict) and "backend_path" in ai_upscaling:
+            config.realesrgan_backend_path = ai_upscaling["backend_path"]
     return config

@@ -43,16 +43,15 @@ whisper_device: cpu
 whisper_compute_type: int8
 ```
 
-3. Install Real-ESRGAN and its dependencies if you want the AI upscaling backend to run locally:
-
-```bash
-python3 -m pip install --user --break-system-packages realesrgan
-```
+3. Real-ESRGAN is downloaded automatically on first use and cached under
+   `~/.cache/los80/realesrgan` (or `/content/.cache/los80/realesrgan` in Colab).
+   Run `los80 doctor` to install it early and verify the runtime.
 
 4. Configure the upscaling block in `config/config.yaml`:
 
 ```yaml
 upscaler_model: RealESRGAN_x4plus
+realesrgan_backend_path: null  # optional executable or extracted runtime directory
 target_width: 3840
 target_height: 2160
 tile_size: 0

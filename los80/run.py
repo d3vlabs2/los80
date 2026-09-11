@@ -8,6 +8,7 @@ from los80.database import JobDatabase
 from los80.scanner import scan_videos
 from los80.analysis import MediaAnalyzer, source_fingerprint
 from los80.performance import profile_action
+from los80.realesrgan_runtime import RealESRGANRuntime, RealESRGANRuntimeError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,12 +24,30 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--force", action="store_true", help="Replace existing analysis results")
     profile = subparsers.add_parser("profile", help="Profile LOS80 discovery and database operations")
     profile.add_argument("--output-dir", type=Path, default=None, help="Directory for profiling artifacts")
+    subparsers.add_parser("doctor", help="Check and prepare the Real-ESRGAN runtime")
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
     config = load_config(args.config)
+    if args.command == "doctor":
+        runtime = RealESRGANRuntime(getattr(config, "realesrgan_backend_path", None))
+        try:
+            info = runtime.ensure()
+        except RealESRGANRuntimeError as exc:
+            print(f"\u2717 Real-ESRGAN: {exc}")
+            raise SystemExit(1) from exc
+        print(f"\u2713 Real-ESRGAN executable: {info.executable}")
+        print(f"\u2713 Model weights: {info.model_dir}")
+        print(f"\u2713 Version: {info.version}")
+        print(f"\u2713 Cache location: {info.cache_dir}")
+        return
+    if args.command is None:
+        try:
+            RealESRGANRuntime(getattr(config, "realesrgan_backend_path", None)).ensure()
+        except RealESRGANRuntimeError as exc:
+            raise SystemExit(f"Real-ESRGAN startup check failed: {exc}") from exc
     database = JobDatabase(config.database_path)
     analyzer = MediaAnalyzer()
 

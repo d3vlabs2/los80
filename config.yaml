@@ -33,6 +33,9 @@ job_lease_seconds: 21600
 whisper_model: base
 whisper_device: cpu
 whisper_compute_type: int8
+# Optional Real-ESRGAN executable or extracted runtime directory. Leave null
+# to use the automatically managed cache.
+realesrgan_backend_path: null
 supported_extensions:
   - .mp4
   - .mkv

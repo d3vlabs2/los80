@@ -62,6 +62,9 @@ translation:
 ai_upscaling:
   # Enable AI upscaling as part of the restoration pipeline when true.
   enabled: true
+  # Optional executable or extracted runtime directory. Leave null to use the
+  # managed cache (~/.cache locally or /content/.cache in Google Colab).
+  backend_path: null
   # Requested maximum output width in pixels.
   target_width: 3840
   # Requested maximum output height in pixels.

@@ -34,3 +34,10 @@ def test_default_config_values() -> None:
     assert config.archive_dir == "./archive"
     assert config.max_retries == 2
     assert config.include_subtitles is True
+
+
+def test_load_nested_realesrgan_override(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("ai_upscaling:\n  backend_path: /opt/realesrgan\n", encoding="utf-8")
+
+    assert load_config(config_file).realesrgan_backend_path == "/opt/realesrgan"
