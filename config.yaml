@@ -7,6 +7,9 @@ database_path: ./los80.sqlite
 max_retries: 2
 include_subtitles: true
 include_translation: true
+translation_model: facebook/nllb-200-distilled-600M
+translation_device: auto
+translation_batch_size: 8
 enable_duplicate_detection: false
 # Preflight media analysis. Set any recommendation override to null to use the
 # analyzer's decision, or true/false/a value to force it for every video.

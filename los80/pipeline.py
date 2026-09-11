@@ -38,7 +38,12 @@ class Pipeline:
             getattr(config, "whisper_device", "cpu"),
             getattr(config, "whisper_compute_type", "int8"),
         )
-        self.translation_service = TranslationService(self.logger)
+        self.translation_service = TranslationService(
+            self.logger,
+            getattr(config, "translation_model", "facebook/nllb-200-distilled-600M"),
+            getattr(config, "translation_device", "auto"),
+            getattr(config, "translation_batch_size", 8),
+        )
         self.upscaler = AIUpscaler(self.logger)
         self.encoder = EncoderService(self.logger)
         self.validator = Validator(self.logger)

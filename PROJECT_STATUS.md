@@ -12,7 +12,7 @@
 
 ## Optional dependencies
 - faster-whisper: required for subtitle generation
-- deep-translator: required for subtitle translation
+- Hugging Face Transformers/PyTorch: offline NLLB subtitle translation
 - Real-ESRGAN: required for AI upscaling
 - FFmpeg and FFprobe: required for encoding and validation
 - Google Drive API client libraries: required for live Drive integration

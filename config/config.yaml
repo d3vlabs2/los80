@@ -53,6 +53,10 @@ whisper:
 translation:
   # Enable translation of generated Spanish subtitles when true.
   enabled: true
+  # Offline Hugging Face NLLB model and inference settings.
+  model: "facebook/nllb-200-distilled-600M"
+  device: "auto"
+  batch_size: 8
   # Language code of the generated Spanish subtitle track.
   source_language: "es"
   # Language code of the translated English subtitle track.

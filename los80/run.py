@@ -11,6 +11,7 @@ from los80.analysis import MediaAnalyzer, source_fingerprint
 from los80.performance import profile_action
 from los80.realesrgan_runtime import RealESRGANRuntime, RealESRGANRuntimeError
 from los80.pipeline import Pipeline
+from los80.translator import TranslationError, TranslationService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,16 +35,34 @@ def main() -> None:
     args = build_parser().parse_args()
     config = load_config(args.config)
     if args.command == "doctor":
+        failed = False
         runtime = RealESRGANRuntime(getattr(config, "realesrgan_backend_path", None))
         try:
             info = runtime.ensure()
         except RealESRGANRuntimeError as exc:
             print(f"\u2717 Real-ESRGAN: {exc}")
-            raise SystemExit(1) from exc
-        print(f"\u2713 Real-ESRGAN executable: {info.executable}")
-        print(f"\u2713 Model weights: {info.model_dir}")
-        print(f"\u2713 Version: {info.version}")
-        print(f"\u2713 Cache location: {info.cache_dir}")
+            failed = True
+        else:
+            print(f"\u2713 Real-ESRGAN executable: {info.executable}")
+            print(f"\u2713 Model weights: {info.model_dir}")
+            print(f"\u2713 Version: {info.version}")
+            print(f"\u2713 Cache location: {info.cache_dir}")
+        translator = TranslationService(
+            model_name=getattr(config, "translation_model", "facebook/nllb-200-distilled-600M"),
+            device=getattr(config, "translation_device", "auto"),
+            batch_size=getattr(config, "translation_batch_size", 8),
+        )
+        try:
+            translation = translator.prepare()
+        except TranslationError as exc:
+            print(f"\u2717 Translation model: {exc}")
+            failed = True
+        else:
+            print(f"\u2713 Translation model installed: {translation['model']}")
+            print(f"\u2713 Translation cache location: {translation['cache_dir']}")
+            print(f"\u2713 Translation device: {translation['device']}")
+        if failed:
+            raise SystemExit(1)
         return
     if args.command is None:
         try:

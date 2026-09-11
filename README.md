@@ -29,11 +29,20 @@ LOS80 is a production-style Python pipeline for batch video restoration. It scan
 
 ## Quick start
 
-1. Install Faster-Whisper:
+1. Install LOS80 and its Faster-Whisper, PyTorch, Transformers, and
+   SentencePiece dependencies:
 
 ```bash
-python3 -m pip install --user --break-system-packages faster-whisper
+python3 -m pip install --user --break-system-packages -e .
 ```
+
+Subtitle translation runs fully offline after the first model download. LOS80
+automatically downloads `facebook/nllb-200-distilled-600M` and caches it in
+`~/.cache/los80/models` locally or `/content/.cache/los80/models` in Colab.
+Set `translation_device: auto` to use CUDA when available and CPU otherwise;
+`translation_batch_size` controls translation throughput and memory usage.
+Run `los80 doctor` to download and verify both the translation model and the
+Real-ESRGAN runtime before processing.
 
 2. Edit `config/config.yaml` and choose a Whisper model such as `tiny`, `base`, `small`, `medium`, or `large-v3`:
 

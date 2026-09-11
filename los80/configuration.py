@@ -41,6 +41,9 @@ class AppConfig:
     max_retries: int = 2
     include_subtitles: bool = True
     include_translation: bool = True
+    translation_model: str = "facebook/nllb-200-distilled-600M"
+    translation_device: str = "auto"
+    translation_batch_size: int = 8
     enable_duplicate_detection: bool = False
     whisper_model: str = "base"
     whisper_device: str = "cpu"
@@ -117,4 +120,13 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         ai_upscaling = raw.get("ai_upscaling", {})
         if isinstance(ai_upscaling, dict) and "backend_path" in ai_upscaling:
             config.realesrgan_backend_path = ai_upscaling["backend_path"]
+        translation = raw.get("translation", {})
+        if isinstance(translation, dict):
+            for yaml_key, attribute in {
+                "model": "translation_model",
+                "device": "translation_device",
+                "batch_size": "translation_batch_size",
+            }.items():
+                if yaml_key in translation:
+                    setattr(config, attribute, translation[yaml_key])
     return config
