@@ -24,6 +24,7 @@ class DashboardSummary:
     completed_transfers: int
     skipped_transfers: int
     failed_transfers: int
+    media: list[dict[str, object]]
 
 
 class Dashboard:
@@ -71,4 +72,15 @@ class Dashboard:
             completed_transfers=0,
             skipped_transfers=0,
             failed_transfers=0,
+            media=[{
+                "source_name": job.get("source_name", ""),
+                "source_resolution": (job.get("analysis") or {}).get("metadata", {}).get("resolution", "") if isinstance(job.get("analysis"), dict) else "",
+                "quality_score": (job.get("analysis") or {}).get("quality_score", "") if isinstance(job.get("analysis"), dict) else "",
+                "detected_issues": (job.get("analysis") or {}).get("detected_issues", []) if isinstance(job.get("analysis"), dict) else [],
+                "recommended_processing_options": (job.get("analysis") or {}).get("recommendations", {}) if isinstance(job.get("analysis"), dict) else {},
+                "recommended_processing_profile": (job.get("analysis") or {}).get("processing_decisions", (job.get("analysis") or {}).get("recommendations", {})) if isinstance(job.get("analysis"), dict) else {},
+                "estimated_processing_time": (job.get("analysis") or {}).get("recommendations", {}).get("estimated_processing_time_seconds", "") if isinstance(job.get("analysis"), dict) else "",
+                "estimated_output_size": (job.get("analysis") or {}).get("recommendations", {}).get("estimated_output_size_bytes", "") if isinstance(job.get("analysis"), dict) else "",
+                "analysis_status": job.get("stages", {}).get("analysis", "pending") if isinstance(job.get("stages"), dict) else "pending",
+            } for job in self.jobs],
         )

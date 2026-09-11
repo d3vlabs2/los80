@@ -66,6 +66,8 @@ class FFmpegBackend:
         except TypeError:
             selected_encoder = self.detect_hardware_encoder()
         command: list[str] = [ffmpeg_path, "-y" if overwrite_existing else "-n", "-i", str(input_path)]
+        if config.get("deinterlace"):
+            command.extend(["-vf", "yadif"])
         if selected_encoder in {"hevc_nvenc", "hevc_qsv", "hevc_vaapi", "hevc_videotoolbox"}:
             command.extend(["-c:v", selected_encoder])
         else:

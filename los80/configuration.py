@@ -18,6 +18,26 @@ class AppConfig:
     working_dir: str = "./working"
     database_path: str = "./los80.sqlite"
     reports_dir: str = "./reports"
+    analysis_enabled: bool = True
+    analysis_force: bool = False
+    analysis_generate_gif: bool = False
+    analysis_quality_threshold: float = 80.0
+    analysis_deinterlace: bool | None = None
+    analysis_denoise: bool | None = None
+    analysis_sharpen: bool | None = None
+    analysis_model: str | None = None
+    analysis_tile_size: int | None = None
+    analysis_encoder_preset: str | None = None
+    analysis_skip: bool | None = None
+    parallel_enabled: bool = False
+    cpu_workers: int = 2
+    io_workers: int = 2
+    adaptive_batching: bool = True
+    max_batch_size: int = 8
+    disk_reserve_bytes: int = 2147483648
+    cleanup_enabled: bool = True
+    cleanup_max_age_seconds: int = 86400
+    job_lease_seconds: int = 21600
     max_retries: int = 2
     include_subtitles: bool = True
     include_translation: bool = True
@@ -63,6 +83,7 @@ class AppConfig:
     stages: list[str] = field(
         default_factory=lambda: [
             "scan",
+            "analysis",
             "audio_extraction",
             "subtitles",
             "translation",
