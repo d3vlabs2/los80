@@ -149,7 +149,7 @@ def test_frame_pipeline_batches_remuxes_tracks_and_cleans_up(tmp_path: Path, mon
     assert ["-map", "1:a?"] == remux[remux.index("-map", remux.index("-map") + 1):][:2]
     assert "1:s?" in remux
     assert "-map_metadata" in remux and "-map_chapters" in remux
-    assert "setsar=4:3" in remux and "bt709" in remux
+    assert "setsar=4/3" in remux and "bt709" in remux
     assert not (tmp_path / ".clip.upscaled.mp4.realesrgan-frames").exists()
 
 

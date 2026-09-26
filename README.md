@@ -172,3 +172,59 @@ The pipeline never overwrites user data during transfer flows. Existing local fi
 
 Open Run_All.ipynb in Google Colab and run all cells.
 # los80
+
+### One-frame CUDA smoke test (Colab Tesla T4)
+
+Select a GPU runtime and use the updated checkout. The default upscaler now checks
+`torch.cuda.is_available()`: CUDA selects `TorchRealESRGANBackend`, using the official
+`RealESRGANer` and `RealESRGAN_x4plus` weights with FP16. Non-CUDA systems retain
+NCNN/Vulkan; this fallback requires a working Vulkan runtime, and is not a PyTorch
+CPU inference path. CUDA setup/inference failures are reported without switching to
+NCNN. An explicit injected backend class remains supported.
+
+Run these notebook cells from the project directory (adjust only the Pilot path
+if your Drive layout differs):
+
+```python
+%cd /content/los80
+%pip install -e '.[cuda]'
+```
+
+```bash
+!mkdir -p /content/los80_smoke
+!ffmpeg -hide_banner -loglevel error -y -ss 00:01:00 -i "/content/drive/MyDrive/LOS80/INPUT/Pilot.mp4" -map 0:v:0 -frames:v 1 /content/los80_smoke/input.png
+!los80 smoke --require-cuda
+```
+
+The smoke command defaults to `/content/los80_smoke/input.png` and
+`/content/los80_smoke/output.png`. It loads the configured model and scale and uses
+256-pixel tiles (override with `--tile-size 128` if necessary). It does not open the
+job database, scan Drive, translate subtitles, or process a video. Model weights
+are downloaded on the first invocation to `/content/.cache/los80/realesrgan/torch`.
+The reported elapsed time includes model setup/download and frame processing.
+
+Expected output includes `backend selected: TorchRealESRGANBackend`,
+`CUDA availability: True`, `GPU name: Tesla T4` (sometimes reported as `Tesla T4` or
+`NVIDIA T4`), `model used: RealESRGAN_x4plus`, `precision: FP16`, input/output
+resolution, scale factor, elapsed seconds, and the output path. At scale 4 an
+input of 720x480 produces 2880x1920. Display the actual result before running a
+full video:
+
+```python
+from IPython.display import display, Image
+display(Image(filename='/content/los80_smoke/output.png'))
+```
+
+CUDA video processing uses the existing extraction, timestamp-based frame names,
+FFmpeg reassembly, track/metadata mapping, and database stages. Real FFmpeg
+regression fixtures cover 25 and 30000/1001 FPS, frame count, audio, subtitles,
+chapters, title metadata, duration, and sample aspect ratio. They exposed and
+fixed existing extraction time-base, concat frame-rate, and setsar syntax bugs. Completed CUDA
+frames are decoded and checked for the expected size when resuming; failed writes
+never publish a partial final frame. Remux output is also published atomically
+so a failed FFmpeg run cannot be mistaken for a completed intermediate. Inference errors (including tiled OOMs) stop
+the stage while keeping completed frames for retry. Same-size changes to model
+settings still require clearing the intermediate frames before a new run.
+
+Local tests mock CUDA and the model; passing tests do not establish actual T4
+inference success. The one-frame Colab run is required before the full Pilot.

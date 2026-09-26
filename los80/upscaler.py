@@ -24,24 +24,11 @@ class RealESRGANBackend:
 
     def upscale(self, input_path: Path, output_path: Path, config: dict[str, object]) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            runtime = RealESRGANRuntime(config.get("backend_path")).ensure()
-        except RealESRGANRuntimeError as exc:
-            raise UpscalingError(str(exc)) from exc
-
+        runtime, model_name = self.prepare(config)
         ffmpeg = str(config.get("ffmpeg_binary", "ffmpeg"))
         ffprobe = str(config.get("ffprobe_binary", "ffprobe"))
         if not shutil.which(ffmpeg) or not shutil.which(ffprobe):
             raise UpscalingError("FFmpeg and FFprobe are required for frame-based Real-ESRGAN upscaling")
-
-        model_name = str(config.get("model", "RealESRGAN_x4plus"))
-        if model_name == "RealESRGAN_x4plus":
-            model_name = "realesrgan-x4plus"
-        missing = [runtime.model_dir / f"{model_name}{suffix}" for suffix in (".bin", ".param")
-                   if not (runtime.model_dir / f"{model_name}{suffix}").is_file()]
-        if missing:
-            raise UpscalingError("Required model files are missing: " + ", ".join(map(str, missing)))
-        self._warn_unsupported_options(config)
 
         work_dir = output_path.parent / f".{output_path.name}.realesrgan-frames"
         source_frames = work_dir / "source"
@@ -54,6 +41,7 @@ class RealESRGANBackend:
             self._run([
                 ffmpeg, "-y", "-copyts", "-i", str(input_path), "-map", "0:v:0",
                 "-fps_mode", "passthrough", "-frame_pts", "1",
+                "-enc_time_base", str(metadata.get("time_base", "1/25")),
                 str(source_frames / "frame-%020d.png"),
             ], "extract video frames")
             if not any(source_frames.glob("frame-*.png")):
@@ -61,23 +49,10 @@ class RealESRGANBackend:
             extraction_marker.write_text("complete\n", encoding="utf-8")
 
         source_paths = sorted(source_frames.glob("frame-*.png"))
+        if not source_paths:
+            raise UpscalingError("No source frames available for resume")
         pending = [path for path in source_paths if not (upscaled_frames / path.name).is_file()]
-        batch_size = max(int(config.get("batch_size", 8)), 1)
-        batches = [pending[index:index + batch_size] for index in range(0, len(pending), batch_size)]
-        gpu_count = self._gpu_count() if config.get("device") == "cuda" else 0
-        worker_count = min(max(gpu_count, 1), len(batches)) if batches else 0
-        if batches:
-            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="realesrgan") as executor:
-                futures = {
-                    executor.submit(
-                        self._upscale_batch, batch, number, number % gpu_count if gpu_count else None,
-                        work_dir, upscaled_frames, runtime.executable, runtime.model_dir,
-                        model_name, config,
-                    ): number
-                    for number, batch in enumerate(batches)
-                }
-                for future in as_completed(futures):
-                    future.result()
+        self._process_frames(pending, work_dir, upscaled_frames, runtime, model_name, config)
         missing_outputs = [path.name for path in source_paths if not (upscaled_frames / path.name).is_file()]
         if missing_outputs:
             raise UpscalingError(f"Real-ESRGAN did not produce {len(missing_outputs)} upscaled frames")
@@ -96,17 +71,55 @@ class RealESRGANBackend:
             command.extend(["-crf", "0", "-preset", "medium"])
         command.extend(["-c:a", "copy", "-c:s", "copy", "-fps_mode", "vfr"])
         if metadata.get("sample_aspect_ratio") not in {None, "", "N/A", "1:1"}:
-            command.extend(["-vf", f"setsar={metadata['sample_aspect_ratio']}"])
+            command.extend(["-vf", "setsar=" + str(metadata["sample_aspect_ratio"]).replace(":", "/")])
         if metadata.get("pix_fmt") and metadata["pix_fmt"] != "unknown":
             command.extend(["-pix_fmt", str(metadata["pix_fmt"])])
         for option, value in self._color_options(metadata).items():
             command.extend([option, value])
-        command.append(str(output_path))
-        self._run(command, "reassemble upscaled video")
-        if not output_path.exists():
-            raise UpscalingError(f"FFmpeg did not produce upscaled video: {output_path}")
+        temporary_video = output_path.with_name(output_path.stem + ".partial" + output_path.suffix)
+        command.append(str(temporary_video))
+        try:
+            self._run(command, "reassemble upscaled video")
+            if not temporary_video.is_file() or temporary_video.stat().st_size == 0:
+                raise UpscalingError(f"FFmpeg did not produce upscaled video: {output_path}")
+            temporary_video.replace(output_path)
+        finally:
+            temporary_video.unlink(missing_ok=True)
         shutil.rmtree(work_dir)
         return output_path
+
+    def prepare(self, config):
+        try:
+            runtime = RealESRGANRuntime(config.get("backend_path")).ensure()
+        except RealESRGANRuntimeError as exc:
+            raise UpscalingError(str(exc)) from exc
+        model_name = str(config.get("model", "RealESRGAN_x4plus"))
+        if model_name == "RealESRGAN_x4plus":
+            model_name = "realesrgan-x4plus"
+        missing = [runtime.model_dir / f"{model_name}{suffix}" for suffix in (".bin", ".param")
+                   if not (runtime.model_dir / f"{model_name}{suffix}").is_file()]
+        if missing:
+            raise UpscalingError("Required model files are missing: " + ", ".join(map(str, missing)))
+        self._warn_unsupported_options(config)
+        return runtime, model_name
+
+    def _process_frames(self, pending, work_dir, upscaled_frames, runtime, model_name, config):
+        batch_size = max(int(config.get("batch_size", 8)), 1)
+        batches = [pending[index:index + batch_size] for index in range(0, len(pending), batch_size)]
+        gpu_count = self._gpu_count() if config.get("device") == "cuda" else 0
+        worker_count = min(max(gpu_count, 1), len(batches)) if batches else 0
+        if batches:
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="realesrgan") as executor:
+                futures = {
+                    executor.submit(
+                        self._upscale_batch, batch, number, number % gpu_count if gpu_count else None,
+                        work_dir, upscaled_frames, runtime.executable, runtime.model_dir,
+                        model_name, config,
+                    ): number
+                    for number, batch in enumerate(batches)
+                }
+                for future in as_completed(futures):
+                    future.result()
 
     def _upscale_batch(self, frames: list[Path], batch_number: int, gpu_id: int | None,
                        work_dir: Path, output_dir: Path, executable: Path, model_dir: Path,
@@ -198,6 +211,10 @@ class RealESRGANBackend:
             path = (output_dir / source.name).resolve()
             escaped = str(path).replace("'", "'\\''")
             lines.append(f"file '{escaped}'")
+            frame_rate = str(metadata.get("avg_frame_rate", "25/1"))
+            if _ratio(frame_rate, 0) <= 0:
+                frame_rate = "25/1"
+            lines.append(f"option framerate {frame_rate}")
             duration = (pts[index + 1] - pts[index]) * numerator / denominator if index + 1 < len(pts) else fallback
             lines.append(f"duration {max(duration, 0.000001):.9f}")
         concat_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -213,7 +230,7 @@ class RealESRGANBackend:
 class AIUpscaler:
     def __init__(self, logger: Optional[logging.Logger] = None, backend_cls: Optional[type] = None) -> None:
         self.logger = logger or logging.getLogger("los80.upscaler")
-        self.backend_cls = backend_cls or RealESRGANBackend
+        self.backend_cls = backend_cls
 
     def upscale(self, video_path: str | Path, output_path: str | Path, config: Optional[dict[str, object]] = None) -> Path:
         input_path = Path(video_path)
@@ -223,17 +240,75 @@ class AIUpscaler:
             self.logger.info("Using existing upscaled intermediate %s", output_file)
             return output_file
 
-        backend = self.backend_cls(self.logger) if self.backend_cls is RealESRGANBackend else self.backend_cls()
+        backend_cls = self.backend_cls or select_backend()
+        backend = backend_cls(self.logger) if issubclass(backend_cls, RealESRGANBackend) else backend_cls()
         if hasattr(backend, "upscale"):
-            self.logger.info("Using %s backend", self.backend_cls.__name__)
+            self.logger.info("Using %s backend", backend_cls.__name__)
             return backend.upscale(input_path, output_file, config or {})
 
         raise UpscalingError("No AI upscaler backend available")
 
     def detect_device(self) -> str:
-        if shutil.which("nvidia-smi"):
-            return "cuda"
-        return "cpu"
+        return "cuda" if cuda_available() else "cpu"
+
+
+def cuda_available() -> bool:
+    try:
+        import torch
+    except ImportError:
+        return False
+    return bool(torch.cuda.is_available())
+
+
+def select_backend():
+    # Never silently fall back to Vulkan after a CUDA inference/setup failure.
+    return TorchRealESRGANBackend if cuda_available() else RealESRGANBackend
+
+
+class TorchRealESRGANBackend(RealESRGANBackend):
+    """PyTorch frame inference; extraction and remux stay in the existing backend."""
+
+    def prepare(self, config):
+        from los80.torch_realesrgan import prepare_engine
+        self.engine, self.half = prepare_engine(config)
+        return None, str(config.get("model", "RealESRGAN_x4plus"))
+
+    def upscale_frame(self, input_path, output_path, config):
+        import cv2
+        temporary = output_path.with_name(output_path.stem + ".partial.png")
+        try:
+            frame = cv2.imread(str(input_path), cv2.IMREAD_UNCHANGED)
+            if frame is None:
+                raise UpscalingError(f"Cannot decode frame: {input_path}")
+            result, _ = self.engine.enhance(frame, outscale=float(config.get("scale", 4)))
+            expected = tuple(int(v * float(config.get("scale", 4))) for v in frame.shape[:2])
+            if result.shape[:2] != expected:
+                raise UpscalingError(f"Unexpected output resolution for {input_path}")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            if not cv2.imwrite(str(temporary), result):
+                raise UpscalingError(f"Cannot write frame: {output_path}")
+            temporary.replace(output_path)
+        except Exception as exc:
+            raise UpscalingError(f"CUDA frame failed: {input_path}: {exc}") from exc
+        finally:
+            temporary.unlink(missing_ok=True)
+        return output_path
+
+    def _process_frames(self, pending, work_dir, upscaled_frames, runtime, model_name, config):
+        # A single model instance owns the CUDA device; do not share it across threads.
+        from PIL import Image
+        for source in sorted((work_dir / "source").glob("frame-*.png")):
+            output = upscaled_frames / source.name
+            try:
+                with Image.open(source) as image:
+                    expected = tuple(int(v * float(config.get("scale", 4))) for v in image.size)
+                with Image.open(output) as image:
+                    image.load()
+                    if image.size == expected:
+                        continue
+            except (OSError, ValueError):
+                pass
+            self.upscale_frame(source, output, config)
 
 
 def _parse_ratio(value: str) -> tuple[int, int]:

@@ -11,6 +11,7 @@ from los80.analysis import MediaAnalyzer, source_fingerprint
 from los80.performance import profile_action
 from los80.realesrgan_runtime import RealESRGANRuntime, RealESRGANRuntimeError
 from los80.pipeline import Pipeline
+from los80.upscaler import UpscalingError, cuda_available, TorchRealESRGANBackend
 from los80.translator import TranslationError, TranslationService
 
 
@@ -28,25 +29,47 @@ def build_parser() -> argparse.ArgumentParser:
     profile = subparsers.add_parser("profile", help="Profile LOS80 discovery and database operations")
     profile.add_argument("--output-dir", type=Path, default=None, help="Directory for profiling artifacts")
     subparsers.add_parser("doctor", help="Check and prepare the Real-ESRGAN runtime")
+    smoke = subparsers.add_parser("smoke", help="Upscale one image without running the video pipeline")
+    smoke.add_argument("--input", type=Path, default=Path("/content/los80_smoke/input.png"))
+    smoke.add_argument("--output", type=Path, default=Path("/content/los80_smoke/output.png"))
+    smoke.add_argument("--require-cuda", action="store_true")
+    smoke.add_argument("--tile-size", type=int, default=256)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
     config = load_config(args.config)
+    if args.command == "smoke":
+        from los80.smoke import smoke_frame
+        try:
+            smoke_frame(args.input, args.output, {
+                "backend_path": config.realesrgan_backend_path,
+                "model": config.upscaler_model, "scale": config.upscaler_scale,
+                "tile_size": args.tile_size, "tile_padding": config.tile_padding,
+            }, require_cuda=args.require_cuda)
+        except (UpscalingError, OSError, ValueError) as exc:
+            raise SystemExit(f"Smoke test failed: {exc}") from exc
+        return
     if args.command == "doctor":
         failed = False
         runtime = RealESRGANRuntime(getattr(config, "realesrgan_backend_path", None))
         try:
-            info = runtime.ensure()
-        except RealESRGANRuntimeError as exc:
-            print(f"\u2717 Real-ESRGAN: {exc}")
+            if cuda_available():
+                TorchRealESRGANBackend().prepare({"model": config.upscaler_model, "tile_size": config.tile_size})
+                info = None
+                print("Real-ESRGAN: CUDA/PyTorch (FP16)")
+            else:
+                info = runtime.ensure()
+        except (RealESRGANRuntimeError, UpscalingError) as exc:
+            print(f"Real-ESRGAN failed: {exc}")
             failed = True
         else:
-            print(f"\u2713 Real-ESRGAN executable: {info.executable}")
-            print(f"\u2713 Model weights: {info.model_dir}")
-            print(f"\u2713 Version: {info.version}")
-            print(f"\u2713 Cache location: {info.cache_dir}")
+            if info is not None:
+                print(f"Real-ESRGAN executable: {info.executable}")
+                print(f"Model weights: {info.model_dir}")
+                print(f"Version: {info.version}")
+                print(f"Cache location: {info.cache_dir}")
         translator = TranslationService(
             model_name=getattr(config, "translation_model", "facebook/nllb-200-distilled-600M"),
             device=getattr(config, "translation_device", "auto"),
@@ -64,7 +87,7 @@ def main() -> None:
         if failed:
             raise SystemExit(1)
         return
-    if args.command is None:
+    if args.command is None and not cuda_available():
         try:
             RealESRGANRuntime(getattr(config, "realesrgan_backend_path", None)).ensure()
         except RealESRGANRuntimeError as exc:

@@ -9,12 +9,16 @@ description = "AI-powered batch video restoration pipeline"
 requires-python = ">=3.10"
 dependencies = [
   "PyYAML>=6.0",
+  "Pillow>=10",
   "faster-whisper>=1.0.0",
   "torch>=2.2",
   "transformers>=4.40",
   "sentencepiece>=0.2",
   "pytest>=8.0",
 ]
+
+[project.optional-dependencies]
+cuda = ["realesrgan==0.3.0", "basicsr==1.4.2", "opencv-python-headless>=4.8", "Pillow>=10"]
 
 [project.scripts]
 los80 = "los80.run:main"
