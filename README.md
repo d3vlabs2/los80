@@ -176,8 +176,8 @@ Open Run_All.ipynb in Google Colab and run all cells.
 ### One-frame CUDA smoke test (Colab Tesla T4)
 
 Select a GPU runtime and use the updated checkout. The default upscaler now checks
-`torch.cuda.is_available()`: CUDA selects `TorchRealESRGANBackend`, using the official
-`RealESRGANer` and `RealESRGAN_x4plus` weights with FP16. Non-CUDA systems retain
+`torch.cuda.is_available()`: CUDA selects `TorchRealESRGANBackend`, using Spandrel to load the official
+`RealESRGAN_x4plus` weights with FP16 on supported GPUs/models. Non-CUDA systems retain
 NCNN/Vulkan; this fallback requires a working Vulkan runtime, and is not a PyTorch
 CPU inference path. CUDA setup/inference failures are reported without switching to
 NCNN. An explicit injected backend class remains supported.
@@ -226,5 +226,63 @@ so a failed FFmpeg run cannot be mistaken for a completed intermediate. Inferenc
 the stage while keeping completed frames for retry. Same-size changes to model
 settings still require clearing the intermediate frames before a new run.
 
-Local tests mock CUDA and the model; passing tests do not establish actual T4
-inference success. The one-frame Colab run is required before the full Pilot.
+Tests exercise real PyTorch/Spandrel loading and tensor inference on CPU as well
+as mocked CUDA selection. Passing them does not establish actual T4 inference
+success. The one-frame Colab run is required before the full Pilot.
+
+
+### Current Colab / Python 3.13 CUDA dependencies
+
+The CUDA extra uses `spandrel>=0.4.2,<0.5`, NumPy and headless OpenCV. It no
+longer installs `realesrgan`, `basicsr`, or patches torchvision imports. Spandrel
+provides maintained RRDBNet architecture detection/loading; LOS80's existing
+`TorchRealESRGANBackend` keeps its `enhance` adapter, padded tiles, frame resume,
+atomic outputs, and smoke CLI. Original x4plus checkpoints and the existing
+`realesrgan/torch/RealESRGAN_x4plus.pth` cache remain compatible. Downloads are
+validated and published atomically. Checkpoints are loaded with
+`torch.load(..., weights_only=True)` and checked for the x4plus architecture.
+
+BasicSR 1.4.2's setup script executes its version file inside a function and then
+looks up `locals()['__version__']`. Python 3.13's PEP 667 semantics mean that
+`exec()` writes to a separate locals snapshot, causing `KeyError('__version__')`
+during metadata generation. Real-ESRGAN 0.3.0's source setup has the same pattern
+and its dependencies pull in BasicSR. Downgrading pip or aliasing torchvision
+modules does not fix this Python incompatibility.
+
+From the **updated checkout**, in a fresh Colab GPU runtime:
+
+```python
+%cd /content/los80
+%pip install -e '.[cuda]'
+```
+
+Keep Colab's preinstalled matching CUDA PyTorch/torchvision pair; no downgrade or
+CPU wheel installation is needed. Verify the runtime before running smoke:
+
+```python
+import torch, spandrel
+print('PyTorch:', torch.__version__, 'CUDA build:', torch.version.cuda)
+assert torch.cuda.is_available(), 'Select a GPU runtime in Colab'
+print('GPU:', torch.cuda.get_device_name(0))
+from los80.upscaler import select_backend
+print('Backend:', select_backend().__name__)
+```
+
+Use the one-frame extraction and `!los80 smoke --require-cuda` commands above.
+No model downloads, inference, or video jobs occur merely from installing the
+package. Runtime FP16 selection checks both model support and GPU capability;
+otherwise the same CUDA backend uses FP32. The model can also be called with
+`half=False` through the existing backend configuration API.
+
+Validation for this change: the editable CUDA-extra install completed on Python
+3.13.15 with PyTorch 2.11.0+cpu, torchvision 0.26.0+cpu and Spandrel 0.4.2;
+`pip check` was clean and the installed `los80 smoke --help` worked outside the
+checkout. The full suite passed with the official downloaded x4plus checkpoint
+supplied via `LOS80_TEST_MODEL` (94 passed, one full-pipeline integration test
+skipped). This verifies CPU execution of the real inference code and mocked CUDA
+selection/precision; actual T4 CUDA/FP16 execution still requires the Colab smoke
+run. Pilot.mp4 was not processed.
+
+References: [BasicSR setup.py](https://github.com/XPixelGroup/BasicSR/blob/v1.4.2/setup.py),
+[Python 3.13 locals semantics](https://docs.python.org/3.13/whatsnew/3.13.html#defined-mutation-semantics-for-locals),
+and [Spandrel's Real-ESRGAN support](https://github.com/chaiNNer-org/spandrel).

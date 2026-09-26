@@ -33,30 +33,30 @@ def test_cuda_failure_never_uses_ncnn(tmp_path, monkeypatch):
         u.AIUpscaler().upscale(tmp_path / 'in.mp4', tmp_path / 'out.mp4')
 
 
-@pytest.mark.parametrize('half', [True, False])
-def test_engine_configuration_and_tile_failures(monkeypatch, half):
+@pytest.mark.parametrize('requested,supported,capability,expected', [
+    (True, True, (7, 5), True), (False, True, (7, 5), False),
+    (True, False, (7, 5), False), (True, True, (5, 0), False),
+])
+def test_engine_configuration(monkeypatch, requested, supported, capability, expected):
+    import los80.torch_realesrgan as runtime
     captured = {}
-    def forward(*args):
-        raise RuntimeError('out of memory')
-    def engine(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(model=SimpleNamespace(forward=forward))
-    modules = {
-        'torch': SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True), device=lambda x: x),
-        'torchvision.transforms.functional_tensor': SimpleNamespace(),
-        'basicsr.archs.rrdbnet_arch': SimpleNamespace(RRDBNet=lambda **kw: kw),
-        'basicsr.utils.download_util': SimpleNamespace(load_file_from_url=lambda **kw: '/tmp/model.pth'),
-        'realesrgan': SimpleNamespace(RealESRGANer=engine),
-    }
-    for name, module in modules.items():
-        monkeypatch.setitem(sys.modules, name, module)
-    result, actual_half = prepare_engine({'half': half, 'tile_size': 256, 'tile_padding': 10})
-    assert actual_half is half and captured['half'] is half
-    assert captured['device'] == 'cuda'
-    assert captured['tile'] == 256 and captured['tile_pad'] == 10
-    assert captured['model']['num_block'] == 23
-    with pytest.raises(u.UpscalingError, match='out of memory'):
-        result.model.forward(None)
+    class Model:
+        supports_half = supported
+        def to(self, **kwargs):
+            captured.update(kwargs)
+            return self
+        def eval(self):
+            captured['eval'] = True
+            return self
+    monkeypatch.setitem(sys.modules, 'torch', SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: True, get_device_capability=lambda _: capability),
+        device=lambda x: x, float16='fp16', float32='fp32'))
+    monkeypatch.setattr(runtime, '_model_path', lambda _: Path('/tmp/model.pth'))
+    monkeypatch.setattr(runtime, '_load_model', lambda _: Model())
+    result, half = prepare_engine({'half': requested, 'tile_size': 256, 'tile_padding': 10})
+    assert half is expected
+    assert captured == {'device': 'cuda', 'dtype': 'fp16' if expected else 'fp32', 'eval': True}
+    assert result.tile == 256 and result.tile_pad == 10
 
 
 @pytest.fixture

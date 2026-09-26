@@ -56,9 +56,10 @@ def main() -> None:
         runtime = RealESRGANRuntime(getattr(config, "realesrgan_backend_path", None))
         try:
             if cuda_available():
-                TorchRealESRGANBackend().prepare({"model": config.upscaler_model, "tile_size": config.tile_size})
+                backend = TorchRealESRGANBackend()
+                backend.prepare({"model": config.upscaler_model, "tile_size": config.tile_size})
                 info = None
-                print("Real-ESRGAN: CUDA/PyTorch (FP16)")
+                print(f"Real-ESRGAN: CUDA/PyTorch ({'FP16' if backend.half else 'FP32'})")
             else:
                 info = runtime.ensure()
         except (RealESRGANRuntimeError, UpscalingError) as exc:

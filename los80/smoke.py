@@ -45,7 +45,7 @@ def smoke_frame(input_path: Path, output_path: Path, config: dict, require_cuda=
     with Image.open(output_path) as image:
         image.load()
         output_size = image.size
-    report = {"model used": model, "precision": "FP16" if getattr(backend, "half", False) else "backend default",
+    report = {"model used": model, "precision": ("FP16" if backend.half else "FP32") if isinstance(backend, TorchRealESRGANBackend) else "backend default",
               "input resolution": f"{input_size[0]}x{input_size[1]}",
               "output resolution": f"{output_size[0]}x{output_size[1]}",
               "scale factor": config.get("scale", 4), "processing time (including model setup)": f"{elapsed:.3f}s",
