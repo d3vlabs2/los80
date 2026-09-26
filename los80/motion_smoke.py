@@ -15,7 +15,7 @@ from los80.upscaler import TorchRealESRGANBackend, UpscalingError, cuda_availabl
 def _probe_motion(path: Path, ffprobe: str):
     completed = subprocess.run([
         ffprobe, "-v", "error", "-select_streams", "v:0", "-show_streams", "-show_frames",
-        "-show_entries", "stream=codec_name,width,height,avg_frame_rate,time_base,sample_aspect_ratio:frame=best_effort_timestamp_time",
+        "-show_entries", "stream=codec_name,width,height,avg_frame_rate,time_base,sample_aspect_ratio:frame=best_effort_timestamp,best_effort_timestamp_time",
         "-of", "json", str(path),
     ], check=False, capture_output=True, text=True)
     if completed.returncode:
@@ -23,7 +23,9 @@ def _probe_motion(path: Path, ffprobe: str):
     try:
         data = json.loads(completed.stdout)
         video = data["streams"][0]
-        timestamps = [Fraction(frame["best_effort_timestamp_time"]) for frame in data["frames"]]
+        pts = [int(frame["best_effort_timestamp"]) for frame in data["frames"]]
+        video["frame_pts"] = pts
+        timestamps = [value * Fraction(video["time_base"]) for value in pts]
         if not timestamps or Fraction(video["avg_frame_rate"]) <= 0:
             raise ValueError("No frames or invalid FPS")
         return video, timestamps
@@ -49,7 +51,7 @@ def _validate_motion(path, source_video, source_times, source_audio, scale, ffpr
     if Fraction(video["avg_frame_rate"]) != Fraction(source_video["avg_frame_rate"]):
         raise UpscalingError("Motion output FPS differs from the source")
     if len(times) != len(source_times):
-        raise UpscalingError("Motion output frame count differs from the source")
+        raise UpscalingError(f"Motion output frame count differs from the source: expected {len(source_times)}, got {len(times)}")
     tolerance = 2 * max(Fraction(video["time_base"]), Fraction(source_video["time_base"]))
     if any(abs(output - source) > tolerance for output, source in zip(times, source_times)):
         raise UpscalingError("Motion output frame timestamps differ from the source")
@@ -84,6 +86,12 @@ def smoke_motion(input_path: Path, output_path: Path | None = None, config: dict
     ffprobe = str(config.get("ffprobe_binary", "ffprobe"))
     started = perf_counter()
     source_video, source_times = _probe_motion(input_path, ffprobe)
+    frame_pts = source_video["frame_pts"]
+    if any(right <= left for left, right in zip(frame_pts, frame_pts[1:])):
+        raise UpscalingError("Motion source frame timestamps must be unique and increasing")
+    frame_manifest = {"schema": 1, "time_base": source_video["time_base"],
+                      "fps": source_video["avg_frame_rate"],
+                      "frames": [{"pts": pts, "name": f"frame-{pts:020d}.png"} for pts in frame_pts]}
     source_audio = _audio_packets(input_path, ffprobe)
     digest = hashlib.sha256()
     with input_path.open("rb") as handle:
@@ -101,7 +109,8 @@ def smoke_motion(input_path: Path, output_path: Path | None = None, config: dict
                "tile_size": identity["tile_size"], "tile_padding": identity["tile_padding"],
                "intermediate_codec": "libx264", "intermediate_crf": 16,
                "intermediate_preset": "slow", "faststart": True, "keep_frames": True,
-               "resume_identity": identity, "output_validator": validate, "progress": True}
+               "resume_identity": identity, "frame_manifest": frame_manifest,
+               "output_validator": validate, "progress": True}
     backend = TorchRealESRGANBackend()
     print(f"backend: {type(backend).__name__}\nGPU: {gpu}\nmodel: {model}", flush=True)
     print(f"input resolution: {source_video['width']}x{source_video['height']}\n"

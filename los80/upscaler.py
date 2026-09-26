@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
@@ -52,29 +53,40 @@ class RealESRGANBackend:
         source_frames.mkdir(parents=True, exist_ok=True)
         upscaled_frames.mkdir(parents=True, exist_ok=True)
         metadata = self._probe(input_path, ffprobe)
-        extraction_marker = work_dir / ".extraction-complete"
-        if not extraction_marker.exists():
-            self._run([
-                ffmpeg, "-y", "-copyts", "-i", str(input_path), "-map", "0:v:0",
-                "-fps_mode", "passthrough", "-frame_pts", "1",
-                "-enc_time_base", str(metadata.get("time_base", "1/25")),
-                str(source_frames / "frame-%020d.png"),
-            ], "extract video frames")
-            if not any(source_frames.glob("frame-*.png")):
-                raise UpscalingError(f"FFmpeg extracted no frames from {input_path}")
-            extraction_marker.write_text("complete\n", encoding="utf-8")
+        if config.get("frame_manifest") is not None:
+            source_paths = self._manifest_source_paths(input_path, work_dir, ffmpeg, config["frame_manifest"])
+            expected_names = {path.name for path in source_paths}
+            stale = sum(path.name not in expected_names for path in upscaled_frames.glob("*.png"))
+            stale_source = sum(path.name not in expected_names for path in source_frames.glob("*.png"))
+            if config.get("progress"):
+                print(f"frame manifest: {len(source_paths)} expected; ignoring {stale} stale upscaled PNGs "
+                      f"and {stale_source} stale source PNGs", flush=True)
+        else:
+            extraction_marker = work_dir / ".extraction-complete"
+            if not extraction_marker.exists():
+                self._run([
+                    ffmpeg, "-y", "-copyts", "-i", str(input_path), "-map", "0:v:0",
+                    "-fps_mode", "passthrough", "-frame_pts", "1",
+                    "-enc_time_base", str(metadata.get("time_base", "1/25")),
+                    str(source_frames / "frame-%020d.png"),
+                ], "extract video frames")
+                if not any(source_frames.glob("frame-*.png")):
+                    raise UpscalingError(f"FFmpeg extracted no frames from {input_path}")
+                extraction_marker.write_text("complete\n", encoding="utf-8")
 
-        source_paths = sorted(source_frames.glob("frame-*.png"))
+            source_paths = sorted(source_frames.glob("frame-*.png"))
         if not source_paths:
             raise UpscalingError("No source frames available for resume")
         pending = [path for path in source_paths if not (upscaled_frames / path.name).is_file()]
-        self._process_frames(pending, work_dir, upscaled_frames, runtime, model_name, config)
+        self._process_frames(pending, work_dir, upscaled_frames, runtime, model_name,
+                             {**config, "source_frame_paths": source_paths})
         missing_outputs = [path.name for path in source_paths if not (upscaled_frames / path.name).is_file()]
         if missing_outputs:
             raise UpscalingError(f"Real-ESRGAN did not produce {len(missing_outputs)} upscaled frames")
 
         concat_file = work_dir / "frames.ffconcat"
-        self._write_concat(concat_file, source_paths, upscaled_frames, metadata)
+        self._write_concat(concat_file, source_paths, upscaled_frames, metadata,
+                           single_images=config.get("frame_manifest") is not None)
         video_codec = str(config.get("intermediate_codec", "libx264"))
         start_time = str(metadata.get("start_time", "0"))
         command = [
@@ -86,7 +98,8 @@ class RealESRGANBackend:
         if video_codec == "libx264":
             command.extend(["-crf", str(config.get("intermediate_crf", 0)),
                             "-preset", str(config.get("intermediate_preset", "medium"))])
-        command.extend(["-c:a", "copy", "-c:s", "copy", "-fps_mode", "vfr"])
+        command.extend(["-c:a", "copy", "-c:s", "copy", "-fps_mode",
+                        "passthrough" if config.get("frame_manifest") is not None else "vfr"])
         if metadata.get("sample_aspect_ratio") not in {None, "", "N/A", "1:1"}:
             command.extend(["-vf", "setsar=" + str(metadata["sample_aspect_ratio"]).replace(":", "/")])
         if metadata.get("pix_fmt") and metadata["pix_fmt"] != "unknown":
@@ -109,6 +122,36 @@ class RealESRGANBackend:
         if not config.get("keep_frames", False):
             shutil.rmtree(work_dir)
         return output_path
+
+    def _manifest_source_paths(self, input_path, work_dir, ffmpeg, manifest):
+        """Migrate legacy caches using source PTS; never enumerate cache files as frames."""
+        source_dir = work_dir / "source"
+        paths = [source_dir / frame["name"] for frame in manifest["frames"]]
+        if not paths or len({path.name for path in paths}) != len(paths):
+            raise UpscalingError("Invalid or duplicate source frame identities")
+        if any(frame["name"] != f"frame-{frame['pts']:020d}.png" for frame in manifest["frames"]):
+            raise UpscalingError("Noncanonical source frame identity")
+        # Existing matching files are retained, including expensive restored PNGs.
+        # A missing source frame only requires cheap extraction, never deletion of
+        # restored frames. Stage extraction separately to avoid old directory tails.
+        if any(not path.is_file() for path in paths):
+            with tempfile.TemporaryDirectory(prefix=".extract-", dir=work_dir) as directory:
+                staged = Path(directory)
+                self._run([
+                    ffmpeg, "-y", "-copyts", "-i", str(input_path), "-map", "0:v:0",
+                    "-fps_mode", "passthrough", "-frame_pts", "1",
+                    "-enc_time_base", manifest["time_base"], str(staged / "frame-%020d.png"),
+                ], "extract video frames")
+                missing = [path.name for path in paths if not (staged / path.name).is_file()]
+                if missing:
+                    raise UpscalingError(f"Extraction is missing {len(missing)} manifest frames")
+                for path in paths:
+                    (staged / path.name).replace(path)
+        temporary = work_dir / "extraction-manifest.partial.json"
+        temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(work_dir / "extraction-manifest.json")
+        (work_dir / ".extraction-complete").write_text("complete\n", encoding="utf-8")
+        return paths
 
     def prepare(self, config):
         try:
@@ -224,22 +267,26 @@ class RealESRGANBackend:
 
     @staticmethod
     def _write_concat(concat_file: Path, source_paths: list[Path], output_dir: Path,
-                      metadata: dict[str, object]) -> None:
+                      metadata: dict[str, object], single_images: bool = False) -> None:
         numerator, denominator = _parse_ratio(str(metadata.get("time_base", "1/25")))
         fallback = 1.0 / _ratio(str(metadata.get("avg_frame_rate", "25/1")), 25.0)
-        pts = [int(path.stem.split("-")[-1]) for path in source_paths]
+        pts = [int(path.stem[len("frame-"):]) for path in source_paths]
         lines = ["ffconcat version 1.0"]
         for index, source in enumerate(source_paths):
             path = (output_dir / source.name).resolve()
             escaped = str(path).replace("'", "'\\''")
             lines.append(f"file '{escaped}'")
+            if single_images:
+                lines.extend(["option pattern_type none", "option loop 0"])
             frame_rate = str(metadata.get("avg_frame_rate", "25/1"))
             if _ratio(frame_rate, 0) <= 0:
                 frame_rate = "25/1"
             lines.append(f"option framerate {frame_rate}")
             duration = (pts[index + 1] - pts[index]) * numerator / denominator if index + 1 < len(pts) else fallback
             lines.append(f"duration {max(duration, 0.000001):.9f}")
-        concat_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        temporary = concat_file.with_suffix(".partial.ffconcat")
+        temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        temporary.replace(concat_file)
 
     @staticmethod
     def _color_options(metadata: dict[str, object]) -> dict[str, str]:
@@ -331,7 +378,9 @@ class TorchRealESRGANBackend(RealESRGANBackend):
     def _process_frames(self, pending, work_dir, upscaled_frames, runtime, model_name, config):
         # A single model instance owns the CUDA device; do not share it across threads.
         from PIL import Image
-        sources = sorted((work_dir / "source").glob("frame-*.png"))
+        sources = config.get("source_frame_paths")
+        if sources is None:
+            sources = sorted((work_dir / "source").glob("frame-*.png"))
         self.frame_count = len(sources)
         self.processed_frames = 0
         self.resumed_frames = 0

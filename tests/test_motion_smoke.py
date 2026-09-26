@@ -189,3 +189,69 @@ def test_motion_validation_rejects_media_changes(monkeypatch, failure):
     monkeypatch.setattr(motion, '_audio_packets', lambda *a: out_audio)
     with pytest.raises(UpscalingError):
         motion._validate_motion(Path('temporary.mp4'), source, times, audio, 2, 'ffprobe')
+
+
+@pytest.mark.parametrize('clip', [10.01], indirect=True)
+@pytest.mark.parametrize('stale_source', [False, True])
+def test_legacy_240_frame_resume_ignores_481_stale_pngs(clip, fake_cuda, monkeypatch, capsys, stale_source):
+    """721 PNGs in the cache must still mean exactly 240 manifest video frames."""
+    import json
+    from PIL import Image
+    calls, _ = fake_cuda
+    first = motion.smoke_motion(clip)
+    output = Path(first['output path'])
+    work = clip.parent / f'.{output.name}.realesrgan-frames'
+    restored = work / 'upscaled'
+    source = work / 'source'
+    manifest = json.loads((work / 'extraction-manifest.json').read_text())
+    names = [frame['name'] for frame in manifest['frames']]
+    assert len(names) == 240
+    assert [frame['pts'] for frame in manifest['frames']] == [i * 1001 for i in range(240)]
+    saved = {name: ((restored / name).read_bytes(), (restored / name).stat().st_mtime_ns) for name in names}
+    # Reproduce legacy directories with no per-frame manifest, an old completion
+    # marker, stale timestamp files, duplicate suffixes, and a crash leftover.
+    (work / 'extraction-manifest.json').unlink()
+    for index in range(240):
+        stale_name = f'frame-{900000 + index:020d}.png'
+        Image.new('RGB', (64, 48), 'red').save(restored / stale_name)
+        if stale_source:
+            Image.new('RGB', (32, 24), 'red').save(source / stale_name)
+        Image.new('RGB', (64, 48), 'blue').save(restored / f'frame-{index:020d}.duplicate.png')
+    Image.new('RGB', (64, 48), 'green').save(restored / 'frame-00000000000000000000.partial.png')
+    assert len(list(restored.glob('*.png'))) == 721
+    # Don't trust even an existing concat file: it may be interrupted or edited.
+    (work / 'frames.ffconcat').write_text('\n'.join(f"file '{restored / name}'" for name in names) + '\n')
+    original_run = TorchRealESRGANBackend._run
+    def run(command, operation):
+        assert '-frame_pts' not in command, 'valid source frames should not be extracted again'
+        return original_run(command, operation)
+    monkeypatch.setattr(TorchRealESRGANBackend, '_run', staticmethod(run))
+    for _ in range(2):
+        report = motion.smoke_motion(clip)
+        assert report['frames resumed'] == 240
+        assert report['frames inferred this run'] == 0
+        assert report['number of frames'] == 240
+        assert report['source FPS'] == report['output FPS'] == '24000/1001'
+        assert len(calls) == 240  # no additional neural calls on either rerun
+        lines = (work / 'frames.ffconcat').read_text().splitlines()
+        references = [line for line in lines if line.startswith('file ')]
+        assert references == [f"file '{(restored / name).resolve()}'" for name in names]
+        assert lines.count('option pattern_type none') == 240
+        assert len(list(restored.glob('*.png'))) == 721  # stale files retained, never consumed
+        assert len(motion._probe_motion(output, 'ffprobe')[1]) == 240
+    for name, (content, modified) in saved.items():
+        assert (restored / name).read_bytes() == content
+        assert (restored / name).stat().st_mtime_ns == modified
+    assert f'ignoring 481 stale upscaled PNGs and {240 if stale_source else 0} stale source PNGs' in capsys.readouterr().out
+
+
+def test_missing_source_png_reextracts_without_recomputing_restored(clip, fake_cuda):
+    report = motion.smoke_motion(clip)
+    output = Path(report['output path'])
+    work = clip.parent / f'.{output.name}.realesrgan-frames'
+    next((work / 'source').glob('frame-*.png')).unlink()
+    repeated = motion.smoke_motion(clip)
+    assert repeated['frames resumed'] == 24
+    assert repeated['frames inferred this run'] == 0
+    assert len(fake_cuda[0]) == 24
+    assert not list(work.glob('.extract-*'))

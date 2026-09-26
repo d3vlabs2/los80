@@ -404,3 +404,40 @@ including tile size and actual precision. If those change, choose a new
 for repeat comparison/validation. A completed rerun reuses the frames and
 re-encodes the MP4. This command does not run the production job database,
 subtitle/translation stages, Drive workflow, or the full Pilot.mp4.
+
+#### Resume a motion cache containing stale PNGs
+
+Keep the existing expensive frame directory. With the updated checkout, rerun:
+
+```bash
+!los80 smoke-motion --require-cuda --scale 2 --strength 0.25
+```
+
+Motion smoke derives the expected frame identities from the original clip's
+integer presentation timestamps and time base, and atomically writes
+`extraction-manifest.json` inside its work directory. Legacy caches are upgraded
+in place after the existing source/settings identity check. Valid canonical
+restored frames are reused without inference. If source PNGs are missing, only
+cheap extraction is repeated; restored PNGs are kept.
+
+Extra files (including alternate names and interrupted `.partial.png` files)
+are **ignored, not deleted**. It is therefore normal for a directory containing
+721 PNGs to keep 721 PNGs while only the 240 current manifest frames are used.
+The log reports the expected count and how many stale files were ignored.
+
+`frames.ffconcat` is regenerated atomically from that same ordered manifest. It
+contains exactly one `file` entry per source frame; its total line count also
+includes timing and single-image options. Pattern matching and looping are
+disabled for each PNG, and motion assembly uses timestamp passthrough. Validation
+still checks the exact decoded frame count, rational FPS, presentation timing,
+aspect ratio and copied audio before publishing the MP4. Repeated identical runs
+reuse the same restored files and do not add PNGs.
+
+The former implementation used a completion marker plus `source/frame-*.png`
+globs instead of a frame manifest, and extraction did not remove directory
+leftovers. Stale source entries could thus be processed and assembled on resume.
+Extra PNGs in `upscaled/` alone were not explicitly globbed by the concat writer;
+their count alone does not establish the origin of a particular Colab mismatch.
+The new manifest and single-image assembly remove that directory ambiguity
+without changing restoration strength, scale, CUDA precision or production
+quality defaults.
