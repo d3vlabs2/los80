@@ -441,3 +441,36 @@ their count alone does not establish the origin of a particular Colab mismatch.
 The new manifest and single-image assembly remove that directory ambiguity
 without changing restoration strength, scale, CUDA precision or production
 quality defaults.
+
+#### Migrate a legacy timestamp convention without rerunning Real-ESRGAN
+
+If old cached names use `0,100,200,...` (including different zero-padding widths)
+while the source manifest uses `0,1001,2002,...`, keep the cache and rerun the same
+command with the updated checkout:
+
+```bash
+!los80 smoke-motion --require-cuda --scale 2 --strength 0.25
+```
+
+LOS80 cheaply decodes the original video into a temporary **ordinal** sequence.
+It verifies a unique, increasing linear mapping between legacy timestamp numbers
+and canonical source PTS, and compares **every legacy source frame's decoded
+pixels, mode and dimensions** against the corresponding freshly decoded frame.
+It also validates every matching restored PNG and its output dimensions. Counts
+alone, directory glob order, and filenames alone are never accepted as evidence.
+Unrelated files are ignored; ambiguous or unverifiable mappings stop with an
+error rather than guessing or starting new inference.
+
+Verified source/restored pairs are staged under `.legacy-migration/` using hard
+links where supported (copies otherwise). A journal with file hashes is committed
+before any canonical names are published. Per-file publication is atomic, and an
+interrupted migration replays the verified snapshot. Old aliases and the recovery
+snapshot are retained; do not delete the work directory. This also protects
+restored data when old and canonical names overlap.
+
+New extraction no longer depends on FFmpeg's PNG encoder time-base or filename
+padding: ordinal frame N is explicitly assigned manifest PTS N. Subsequent runs
+use the canonical manifest directly. A fully verified 240-frame legacy cache
+should report **240 resumed, 0 newly inferred**, preserving 24000/1001 FPS, source
+timing and audio validation. Restoration settings and production defaults are
+unchanged.

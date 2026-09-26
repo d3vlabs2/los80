@@ -54,7 +54,8 @@ class RealESRGANBackend:
         upscaled_frames.mkdir(parents=True, exist_ok=True)
         metadata = self._probe(input_path, ffprobe)
         if config.get("frame_manifest") is not None:
-            source_paths = self._manifest_source_paths(input_path, work_dir, ffmpeg, config["frame_manifest"])
+            source_paths = self._manifest_source_paths(input_path, work_dir, ffmpeg, config["frame_manifest"],
+                                                       float(config.get("scale", 4)))
             expected_names = {path.name for path in source_paths}
             stale = sum(path.name not in expected_names for path in upscaled_frames.glob("*.png"))
             stale_source = sum(path.name not in expected_names for path in source_frames.glob("*.png"))
@@ -123,7 +124,7 @@ class RealESRGANBackend:
             shutil.rmtree(work_dir)
         return output_path
 
-    def _manifest_source_paths(self, input_path, work_dir, ffmpeg, manifest):
+    def _manifest_source_paths(self, input_path, work_dir, ffmpeg, manifest, scale=4):
         """Migrate legacy caches using source PTS; never enumerate cache files as frames."""
         source_dir = work_dir / "source"
         paths = [source_dir / frame["name"] for frame in manifest["frames"]]
@@ -131,22 +132,27 @@ class RealESRGANBackend:
             raise UpscalingError("Invalid or duplicate source frame identities")
         if any(frame["name"] != f"frame-{frame['pts']:020d}.png" for frame in manifest["frames"]):
             raise UpscalingError("Noncanonical source frame identity")
-        # Existing matching files are retained, including expensive restored PNGs.
-        # A missing source frame only requires cheap extraction, never deletion of
-        # restored frames. Stage extraction separately to avoid old directory tails.
-        if any(not path.is_file() for path in paths):
+        from los80.cache_migration import finish_migration, migrate_legacy_frames, has_legacy_pairs
+        finish_migration(work_dir, manifest)
+        needs_reassociation = (any(not (work_dir / "upscaled" / path.name).is_file() for path in paths)
+                               and has_legacy_pairs(work_dir, manifest))
+        if any(not path.is_file() for path in paths) or needs_reassociation:
+            # Decode by ordinal, independent of FFmpeg's image encoder time base
+            # and filename padding. Associate ordinals with ffprobe's source PTS.
             with tempfile.TemporaryDirectory(prefix=".extract-", dir=work_dir) as directory:
                 staged = Path(directory)
                 self._run([
                     ffmpeg, "-y", "-copyts", "-i", str(input_path), "-map", "0:v:0",
-                    "-fps_mode", "passthrough", "-frame_pts", "1",
-                    "-enc_time_base", manifest["time_base"], str(staged / "frame-%020d.png"),
+                    "-fps_mode", "passthrough", "-start_number", "0",
+                    str(staged / "decoded-%09d.png"),
                 ], "extract video frames")
-                missing = [path.name for path in paths if not (staged / path.name).is_file()]
-                if missing:
-                    raise UpscalingError(f"Extraction is missing {len(missing)} manifest frames")
-                for path in paths:
-                    (staged / path.name).replace(path)
+                decoded = [staged / f"decoded-{index:09d}.png" for index in range(len(paths))]
+                if any(not path.is_file() for path in decoded) or len(list(staged.glob("decoded-*.png"))) != len(paths):
+                    raise UpscalingError(f"Extraction frame count differs from manifest ({len(paths)} expected)")
+                migrated = migrate_legacy_frames(work_dir, manifest, decoded, scale)
+                if not migrated:
+                    for decoded_path, path in zip(decoded, paths):
+                        decoded_path.replace(path)
         temporary = work_dir / "extraction-manifest.partial.json"
         temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         temporary.replace(work_dir / "extraction-manifest.json")

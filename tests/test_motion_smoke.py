@@ -255,3 +255,108 @@ def test_missing_source_png_reextracts_without_recomputing_restored(clip, fake_c
     assert repeated['frames inferred this run'] == 0
     assert len(fake_cuda[0]) == 24
     assert not list(work.glob('.extract-*'))
+
+
+def _make_legacy_timestamp_cache(clip, width=19):
+    """Prepare an old cache with 19-digit names in a 100-tick convention."""
+    import json
+    report = motion.smoke_motion(clip)
+    output = Path(report['output path'])
+    work = clip.parent / f'.{output.name}.realesrgan-frames'
+    manifest = json.loads((work / 'extraction-manifest.json').read_text())
+    canonical = [frame['name'] for frame in manifest['frames']]
+    saved = {}
+    for kind in ('source', 'upscaled'):
+        images = [(work / kind / name).read_bytes() for name in canonical]
+        for name in canonical:
+            (work / kind / name).unlink()
+        for index, content in enumerate(images):
+            legacy = f'frame-{index*100:0{width}d}.png'
+            (work / kind / legacy).write_bytes(content)
+            saved[(kind, canonical[index])] = content
+    (work / 'extraction-manifest.json').unlink()
+    return work, canonical, saved
+
+
+@pytest.mark.parametrize('clip', [10.01], indirect=True)
+@pytest.mark.parametrize('width', [19, 20])
+def test_migrate_240_legacy_100_tick_frames_without_inference(clip, fake_cuda, monkeypatch, width):
+    import json
+    work, names, saved = _make_legacy_timestamp_cache(clip, width)
+    assert len(list((work / 'source').glob('*.png'))) == 240
+    assert len(list((work / 'upscaled').glob('*.png'))) == 240
+    fake_cuda[0].clear()
+    monkeypatch.setattr(TorchRealESRGANBackend, 'upscale_frame', lambda *a: pytest.fail('unexpected inference'))
+    for _ in range(2):
+        report = motion.smoke_motion(clip)
+        assert report['frames resumed'] == report['number of frames'] == 240
+        assert report['frames inferred this run'] == 0
+        assert report['source FPS'] == report['output FPS'] == '24000/1001'
+        assert not fake_cuda[0]
+        for (kind, name), content in saved.items():
+            assert (work / kind / name).read_bytes() == content
+        manifest = json.loads((work / 'extraction-manifest.json').read_text())
+        assert [frame['pts'] for frame in manifest['frames']] == [i*1001 for i in range(240)]
+    assert (work / '.legacy-migration' / 'complete').exists()
+    assert len(list((work / 'upscaled').glob('*.png'))) == (480 if width == 19 else 479)
+
+
+def test_legacy_migration_rejects_equal_counts_with_wrong_pixels(clip, fake_cuda, monkeypatch):
+    from PIL import Image
+    work, names, saved = _make_legacy_timestamp_cache(clip)
+    wrong = work / 'source' / f'frame-{500:019d}.png'
+    Image.new('RGB', (32, 24), 'magenta').save(wrong)
+    monkeypatch.setattr(TorchRealESRGANBackend, 'upscale_frame', lambda *a: pytest.fail('unexpected inference'))
+    with pytest.raises(UpscalingError, match='Cannot verify legacy source-frame sequence'):
+        motion.smoke_motion(clip)
+    assert not (work / '.legacy-migration').exists()
+    for index, name in enumerate(names):
+        assert (work / 'upscaled' / f'frame-{index*100:019d}.png').read_bytes() == saved[('upscaled', name)]
+
+
+def test_interrupted_legacy_migration_replays_snapshot(clip, fake_cuda, monkeypatch):
+    from los80 import cache_migration
+    work, names, saved = _make_legacy_timestamp_cache(clip)
+    original = cache_migration._publish
+    publications = []
+    def interrupt(source, destination):
+        publications.append(destination)
+        if len(publications) == 7:
+            raise KeyboardInterrupt('migration interrupted')
+        original(source, destination)
+    monkeypatch.setattr(cache_migration, '_publish', interrupt)
+    monkeypatch.setattr(TorchRealESRGANBackend, 'upscale_frame', lambda *a: pytest.fail('unexpected inference'))
+    with pytest.raises(KeyboardInterrupt):
+        motion.smoke_motion(clip)
+    assert (work / '.legacy-migration' / 'ready.json').exists()
+    assert not (work / '.legacy-migration' / 'complete').exists()
+    monkeypatch.setattr(cache_migration, '_publish', original)
+    run = TorchRealESRGANBackend._run
+    def no_extract(command, operation):
+        assert operation != 'extract video frames'
+        return run(command, operation)
+    monkeypatch.setattr(TorchRealESRGANBackend, '_run', staticmethod(no_extract))
+    report = motion.smoke_motion(clip)
+    assert report['frames resumed'] == 24 and report['frames inferred this run'] == 0
+    for (kind, name), content in saved.items():
+        assert (work / kind / name).read_bytes() == content
+
+
+def test_legacy_migration_ignores_unrelated_numeric_pngs(clip, fake_cuda, monkeypatch):
+    from PIL import Image
+    work, _, _ = _make_legacy_timestamp_cache(clip)
+    for kind, size in [('source', (32, 24)), ('upscaled', (64, 48))]:
+        Image.new('RGB', size, 'red').save(work / kind / f'frame-{999999:019d}.png')
+        Image.new('RGB', size, 'red').save(work / kind / 'frame-0001.partial.png')
+    monkeypatch.setattr(TorchRealESRGANBackend, 'upscale_frame', lambda *a: pytest.fail('unexpected inference'))
+    report = motion.smoke_motion(clip)
+    assert report['frames resumed'] == 24 and report['frames inferred this run'] == 0
+
+
+def test_legacy_restored_frames_reassociated_when_canonical_sources_already_exist(clip, fake_cuda, monkeypatch):
+    work, names, saved = _make_legacy_timestamp_cache(clip)
+    for name in names:
+        (work / 'source' / name).write_bytes(saved[('source', name)])
+    monkeypatch.setattr(TorchRealESRGANBackend, 'upscale_frame', lambda *a: pytest.fail('unexpected inference'))
+    report = motion.smoke_motion(clip)
+    assert report['frames resumed'] == 24 and report['frames inferred this run'] == 0
