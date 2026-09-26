@@ -46,12 +46,29 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--contact-sheet", action="store_true")
     compare.add_argument("--crop", nargs=4, type=int, metavar=("X", "Y", "WIDTH", "HEIGHT"),
                          help="Contact-sheet crop in source pixels; full frame still used for inference")
+    motion = subparsers.add_parser("smoke-motion", help="Restore a short clip with resumable CUDA frames")
+    motion.add_argument("--input", type=Path, default=Path("/content/los80_motion/original.mp4"))
+    motion.add_argument("--output", type=Path, default=None, help="Defaults to restored_<scale>x_strength<strength>.mp4 beside input")
+    motion.add_argument("--require-cuda", action="store_true")
+    motion.add_argument("--scale", type=int, choices=(2, 3, 4), default=2)
+    motion.add_argument("--strength", type=float, default=0.25)
+    motion.add_argument("--tile-size", type=int, default=256)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
     config = load_config(args.config)
+    if args.command == "smoke-motion":
+        from los80.motion_smoke import smoke_motion
+        try:
+            smoke_motion(args.input, args.output, {
+                "scale": args.scale, "restoration_strength": args.strength,
+                "tile_size": args.tile_size, "tile_padding": config.tile_padding,
+            }, require_cuda=args.require_cuda)
+        except (UpscalingError, OSError, ValueError) as exc:
+            raise SystemExit(f"Motion smoke failed: {exc}") from exc
+        return
     if args.command in {"smoke", "smoke-compare"}:
         from los80.smoke import smoke_frame, smoke_compare
         options = {

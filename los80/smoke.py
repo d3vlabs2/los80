@@ -85,7 +85,7 @@ def smoke_frame(input_path: Path, output_path: Path, config: dict, require_cuda=
     else:
         with tempfile.TemporaryDirectory(prefix=".smoke-", dir=output_path.parent) as directory:
             native_path = Path(directory) / "native.png"
-            _upscale_frame(backend, runtime, model, input_path, native_path, {**config, "scale": 4})
+            _upscale_frame(backend, runtime, model, input_path, native_path, {**config, "scale": 4, "restoration_strength": 1.0})
             result = restoration_variant(_read_image(input_path), _read_image(native_path), scale, strength)
             _atomic_png(output_path, result)
     elapsed = perf_counter() - start
@@ -171,7 +171,7 @@ def smoke_compare(input_path: Path, output_dir: Path, config: dict, scales=(2, 3
     if any(path.resolve() == input_path.resolve() for path in targets):
         raise ValueError("Comparison output must not overwrite the input")
     start = perf_counter()
-    native_config = {**config, "model": model, "scale": 4}
+    native_config = {**config, "model": model, "scale": 4, "restoration_strength": 1.0}
     backend, runtime, selected_model = _prepare_backend(native_config, require_cuda)
     output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".comparison-", dir=output_dir) as directory:

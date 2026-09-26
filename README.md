@@ -354,3 +354,53 @@ The existing single-frame command also accepts scale and strength:
 The production pipeline retains its existing defaults, frame resume, FP16,
 tiling, model cache, and atomic outputs. The comparison command does not open
 the job database, change production configuration or process Pilot.mp4.
+
+### Short-video motion smoke test (selected 2x / 0.25 restoration)
+
+Use the updated checkout in your Colab GPU runtime, with the already-extracted
+short clip at `/content/los80_motion/original.mp4`:
+
+```bash
+!los80 smoke-motion --require-cuda --scale 2 --strength 0.25
+```
+
+Output: **`/content/los80_motion/restored_2x_strength0.25.mp4`**.
+The 848x480 input becomes 1696x960. The source FPS stays **24000/1001**;
+240 frames at that rate span 10.01 seconds. The command inspects the actual clip
+and prints its measured frame count and source/output FPS rather than assuming
+these values.
+
+Each frame uses the existing `TorchRealESRGANBackend`, official
+`RealESRGAN_x4plus` weights, CUDA/FP16 on the T4, and 256-pixel tiles. It performs
+native 4x neural inference, then uses the existing still-comparison function to
+Lanczos-downsample to 2x and blend 25% neural output with 75% Lanczos-resized
+original. No face enhancement is used. FFmpeg encodes H.264 with **CRF 16, slow
+preset**, copies the original audio, preserves sample aspect ratio, and enables
+MP4 fast start. Production defaults are unchanged.
+
+The report includes backend, GPU, model, precision, input/output resolution,
+exact source/output FPS, frame count, processing time, average inference time
+per **newly processed** frame, resumed-frame count and output path. Inference
+timing excludes model setup, PNG IO, blending and video encoding. When all frames
+are reused, the average is reported as unmeasured rather than as a zero-speed
+inference run. Overall processing time includes setup, validation and encoding.
+
+Resume by running **the same command again**. Work is retained in:
+
+```text
+/content/los80_motion/.restored_2x_strength0.25.mp4.realesrgan-frames/
+```
+
+Valid completed frames are reused; missing, corrupt or incorrectly sized frames
+are regenerated. Frames and the final video are published atomically. Before
+publishing the MP4, LOS80 checks resolution, H.264 codec, exact rational FPS,
+frame count, presentation timestamps, aspect ratio and copied audio packet
+hashes/timing. A failed encode or validation leaves completed frames available
+and preserves any previous final video.
+
+Resume metadata fingerprints the source contents and restoration settings,
+including tile size and actual precision. If those change, choose a new
+`--output` path instead of mixing results. Work is retained even after success
+for repeat comparison/validation. A completed rerun reuses the frames and
+re-encodes the MP4. This command does not run the production job database,
+subtitle/translation stages, Drive workflow, or the full Pilot.mp4.

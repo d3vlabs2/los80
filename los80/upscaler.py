@@ -8,6 +8,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
+from time import perf_counter
 
 from los80.realesrgan_runtime import RealESRGANRuntime, RealESRGANRuntimeError
 
@@ -31,6 +32,21 @@ class RealESRGANBackend:
             raise UpscalingError("FFmpeg and FFprobe are required for frame-based Real-ESRGAN upscaling")
 
         work_dir = output_path.parent / f".{output_path.name}.realesrgan-frames"
+        if config.get("resume_identity") is not None:
+            work_dir.mkdir(parents=True, exist_ok=True)
+            manifest = work_dir / "resume.json"
+            identity = dict(config["resume_identity"])
+            if hasattr(self, "half"):
+                identity["precision"] = "FP16" if self.half else "FP32"
+            if manifest.exists():
+                if json.loads(manifest.read_text()) != identity:
+                    raise UpscalingError("Motion resume settings/source changed; choose a new --output path")
+            elif any(path.name != "resume.partial.json" for path in work_dir.iterdir()):
+                raise UpscalingError("Frame directory has no resume identity; choose a new --output path")
+            else:
+                temporary_manifest = work_dir / "resume.partial.json"
+                temporary_manifest.write_text(json.dumps(identity, sort_keys=True), encoding="utf-8")
+                temporary_manifest.replace(manifest)
         source_frames = work_dir / "source"
         upscaled_frames = work_dir / "upscaled"
         source_frames.mkdir(parents=True, exist_ok=True)
@@ -68,7 +84,8 @@ class RealESRGANBackend:
             "-map_metadata", "1", "-map_chapters", "1", "-c:v", video_codec,
         ]
         if video_codec == "libx264":
-            command.extend(["-crf", "0", "-preset", "medium"])
+            command.extend(["-crf", str(config.get("intermediate_crf", 0)),
+                            "-preset", str(config.get("intermediate_preset", "medium"))])
         command.extend(["-c:a", "copy", "-c:s", "copy", "-fps_mode", "vfr"])
         if metadata.get("sample_aspect_ratio") not in {None, "", "N/A", "1:1"}:
             command.extend(["-vf", "setsar=" + str(metadata["sample_aspect_ratio"]).replace(":", "/")])
@@ -76,16 +93,21 @@ class RealESRGANBackend:
             command.extend(["-pix_fmt", str(metadata["pix_fmt"])])
         for option, value in self._color_options(metadata).items():
             command.extend([option, value])
+        if config.get("faststart"):
+            command.extend(["-movflags", "+faststart"])
         temporary_video = output_path.with_name(output_path.stem + ".partial" + output_path.suffix)
         command.append(str(temporary_video))
         try:
             self._run(command, "reassemble upscaled video")
             if not temporary_video.is_file() or temporary_video.stat().st_size == 0:
                 raise UpscalingError(f"FFmpeg did not produce upscaled video: {output_path}")
+            if config.get("output_validator"):
+                config["output_validator"](temporary_video)
             temporary_video.replace(output_path)
         finally:
             temporary_video.unlink(missing_ok=True)
-        shutil.rmtree(work_dir)
+        if not config.get("keep_frames", False):
+            shutil.rmtree(work_dir)
         return output_path
 
     def prepare(self, config):
@@ -271,6 +293,8 @@ class TorchRealESRGANBackend(RealESRGANBackend):
     def prepare(self, config):
         from los80.torch_realesrgan import prepare_engine
         self.engine, self.half = prepare_engine(config)
+        if config.get("progress"):
+            print(f"precision: {'FP16' if self.half else 'FP32'}", flush=True)
         return None, str(config.get("model", "RealESRGAN_x4plus"))
 
     def upscale_frame(self, input_path, output_path, config):
@@ -280,7 +304,15 @@ class TorchRealESRGANBackend(RealESRGANBackend):
             frame = cv2.imread(str(input_path), cv2.IMREAD_UNCHANGED)
             if frame is None:
                 raise UpscalingError(f"Cannot decode frame: {input_path}")
-            result, _ = self.engine.enhance(frame, outscale=float(config.get("scale", 4)))
+            from los80.torch_realesrgan import restoration_variant, validate_restoration_settings
+            scale = float(config.get("scale", 4))
+            strength = float(config.get("restoration_strength", 1))
+            validate_restoration_settings(scale, strength)
+            started = perf_counter()
+            result, _ = self.engine.enhance(frame, outscale=4 if strength != 1 else scale)
+            inference_seconds = perf_counter() - started
+            if strength != 1:
+                result = restoration_variant(frame, result, scale, strength)
             expected = tuple(int(v * float(config.get("scale", 4))) for v in frame.shape[:2])
             if result.shape[:2] != expected:
                 raise UpscalingError(f"Unexpected output resolution for {input_path}")
@@ -288,6 +320,8 @@ class TorchRealESRGANBackend(RealESRGANBackend):
             if not cv2.imwrite(str(temporary), result):
                 raise UpscalingError(f"Cannot write frame: {output_path}")
             temporary.replace(output_path)
+            self.inference_seconds = getattr(self, "inference_seconds", 0.0) + inference_seconds
+            self.processed_frames = getattr(self, "processed_frames", 0) + 1
         except Exception as exc:
             raise UpscalingError(f"CUDA frame failed: {input_path}: {exc}") from exc
         finally:
@@ -297,7 +331,12 @@ class TorchRealESRGANBackend(RealESRGANBackend):
     def _process_frames(self, pending, work_dir, upscaled_frames, runtime, model_name, config):
         # A single model instance owns the CUDA device; do not share it across threads.
         from PIL import Image
-        for source in sorted((work_dir / "source").glob("frame-*.png")):
+        sources = sorted((work_dir / "source").glob("frame-*.png"))
+        self.frame_count = len(sources)
+        self.processed_frames = 0
+        self.resumed_frames = 0
+        self.inference_seconds = 0.0
+        for index, source in enumerate(sources, 1):
             output = upscaled_frames / source.name
             try:
                 with Image.open(source) as image:
@@ -305,10 +344,13 @@ class TorchRealESRGANBackend(RealESRGANBackend):
                 with Image.open(output) as image:
                     image.load()
                     if image.size == expected:
+                        self.resumed_frames += 1
                         continue
             except (OSError, ValueError):
                 pass
             self.upscale_frame(source, output, config)
+            if config.get("progress") and (index == 1 or index % 10 == 0 or index == self.frame_count):
+                print(f"frames: {index}/{self.frame_count} ({self.resumed_frames} resumed)", flush=True)
 
 
 def _parse_ratio(value: str) -> tuple[int, int]:
