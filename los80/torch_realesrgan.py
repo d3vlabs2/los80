@@ -153,6 +153,41 @@ class SpandrelEngine:
             alpha_result = cv2.cvtColor(alpha_rgb, cv2.COLOR_RGB2GRAY)
             result = np.dstack((result, alpha_result))
         output = np.rint(result * maximum).astype(image.dtype)
-        if outscale != self.model.scale:
-            output = cv2.resize(output, (int(width*outscale), int(height*outscale)), interpolation=cv2.INTER_LANCZOS4)
-        return output, mode
+        return restoration_variant(image, output, outscale), mode
+
+
+def validate_restoration_settings(scale, strength):
+    """Validate postprocessing before any expensive model work."""
+    if not math.isfinite(scale) or not 0 < scale <= 4:
+        raise ValueError("Output scale must be greater than zero and at most 4")
+    if not math.isfinite(strength) or not 0 <= strength <= 1:
+        raise ValueError("Restoration strength must be between 0 and 1")
+
+
+def restoration_variant(original, neural, scale=4, strength=1.0):
+    """Downsample native inference, then blend with a Lanczos source resize.
+
+    This is image-space blending, not model denoise/weight interpolation.
+    Arrays retain OpenCV channel order, bit depth and dimensions. The original
+    is never resized before neural inference. Strength 1 preserves normal output.
+    """
+    import cv2
+    import numpy as np
+    validate_restoration_settings(scale, strength)
+    if original.dtype not in (np.uint8, np.uint16) or original.dtype != neural.dtype:
+        raise ValueError("Source and neural image must have matching uint8/uint16 types")
+    if original.shape[2:] != neural.shape[2:]:
+        raise ValueError("Source and neural image channels must match")
+    height, width = original.shape[:2]
+    target = (int(width * scale), int(height * scale))
+    if min(target) < 1 or neural.shape[1] < target[0] or neural.shape[0] < target[1]:
+        raise ValueError("Neural output must be at least as large as the requested output")
+    restored = neural if neural.shape[:2] == target[::-1] else cv2.resize(
+        neural, target, interpolation=cv2.INTER_LANCZOS4)
+    if strength == 1:
+        return restored
+    baseline = cv2.resize(original, target, interpolation=cv2.INTER_LANCZOS4)
+    if strength == 0:
+        return baseline
+    blended = strength * restored.astype(np.float32) + (1 - strength) * baseline.astype(np.float32)
+    return np.rint(blended).clip(0, np.iinfo(original.dtype).max).astype(original.dtype)

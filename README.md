@@ -286,3 +286,71 @@ run. Pilot.mp4 was not processed.
 References: [BasicSR setup.py](https://github.com/XPixelGroup/BasicSR/blob/v1.4.2/setup.py),
 [Python 3.13 locals semantics](https://docs.python.org/3.13/whatsnew/3.13.html#defined-mutation-semantics-for-locals),
 and [Spandrel's Real-ESRGAN support](https://github.com/chaiNNer-org/spandrel).
+
+### Compare restoration strength on one frame
+
+From the updated checkout in the working Colab GPU runtime:
+
+```bash
+!los80 smoke-compare --require-cuda --contact-sheet
+```
+
+This reads `/content/los80_smoke/input.png`, performs **one native 4x neural
+upscale**, and writes 12 combinations to `/content/los80_smoke/comparison/`:
+2x, 3x and 4x output, each at strengths 0.25, 0.50, 0.75 and 1.00. For the
+848x480 input these are 1696x960, 2544x1440 and 3392x1920 respectively.
+Example filename: `RealESRGAN_x4plus_scale2_strength0.25.png`.
+`contact-sheet.png` includes the original and all outputs, with model, scale
+and blend labels. All panels use a common display size; open individual PNGs
+at 100% to judge the actual output resolution.
+
+```python
+from IPython.display import Image, display
+display(Image(filename='/content/los80_smoke/comparison/contact-sheet.png'))
+```
+
+RealESRGAN_x4plus has **no native denoise-strength setting**. The upstream
+[denoise control](https://github.com/xinntao/Real-ESRGAN/blob/master/inference_realesrgan.py)
+is for `realesr-general-x4v3`, a different model. LOS80 uses an explicit
+image-space blend at the final output resolution:
+
+`output = strength * neural_result + (1 - strength) * Lanczos(original)`
+
+The neural 4x output is downsampled with Lanczos for 2x/3x; the original is never
+stretched before inference. Strength 1.00 is the unchanged neural result,
+0.00 is the conventional Lanczos reference, and lower intermediate strengths
+reduce the neural contribution. This can soften hallucinated features but
+cannot establish the true missing detail; original noise/blur may return.
+No face-enhancement model is used. Bit depth and channels are preserved in the
+comparison PNGs (contact sheets are 8-bit RGB previews).
+
+Start by comparing **2x at 0.25 and 0.50** against 2x at 1.00 and the original.
+Then compare 3x at 0.50. Keep 4x/1.00 as the aggressive reference. To select a
+smaller set or include a purely conventional reference:
+
+```bash
+!los80 smoke-compare --require-cuda --scales 2 3 --strengths 0 0.25 0.50 1 --contact-sheet
+```
+
+For face detail, add `--crop X Y WIDTH HEIGHT` using coordinates from the
+**848x480 source**. For example, after choosing a face region:
+
+```bash
+!los80 smoke-compare --require-cuda --contact-sheet --crop 300 100 160 160
+```
+
+This writes `contact-sheet-crop.png`. The example coordinates must be adjusted
+for the face you want to inspect. Cropping affects only the contact sheet;
+the full frame still enters inference, and individual outputs stay full-frame.
+Each invocation performs one new inference; it does not reuse an earlier
+frame's results. Existing comparison filenames are replaced atomically.
+
+The existing single-frame command also accepts scale and strength:
+
+```bash
+!los80 smoke --require-cuda --scale 2 --strength 0.50 --output /content/los80_smoke/output-2x-strength0.50.png
+```
+
+The production pipeline retains its existing defaults, frame resume, FP16,
+tiling, model cache, and atomic outputs. The comparison command does not open
+the job database, change production configuration or process Pilot.mp4.

@@ -34,20 +34,40 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--output", type=Path, default=Path("/content/los80_smoke/output.png"))
     smoke.add_argument("--require-cuda", action="store_true")
     smoke.add_argument("--tile-size", type=int, default=256)
+    smoke.add_argument("--scale", type=float, default=None, help="Output scale (neural model remains 4x)")
+    smoke.add_argument("--strength", type=float, default=1.0, help="Output blend: 0=Lanczos original, 1=neural result")
+    compare = subparsers.add_parser("smoke-compare", help="Compare one frame with one shared 4x inference")
+    compare.add_argument("--input", type=Path, default=Path("/content/los80_smoke/input.png"))
+    compare.add_argument("--output-dir", type=Path, default=Path("/content/los80_smoke/comparison"))
+    compare.add_argument("--require-cuda", action="store_true")
+    compare.add_argument("--tile-size", type=int, default=256)
+    compare.add_argument("--scales", nargs="+", type=int, choices=(2, 3, 4), default=[2, 3, 4])
+    compare.add_argument("--strengths", nargs="+", type=float, default=[0.25, 0.50, 0.75, 1.0])
+    compare.add_argument("--contact-sheet", action="store_true")
+    compare.add_argument("--crop", nargs=4, type=int, metavar=("X", "Y", "WIDTH", "HEIGHT"),
+                         help="Contact-sheet crop in source pixels; full frame still used for inference")
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
     config = load_config(args.config)
-    if args.command == "smoke":
-        from los80.smoke import smoke_frame
+    if args.command in {"smoke", "smoke-compare"}:
+        from los80.smoke import smoke_frame, smoke_compare
+        options = {
+            "backend_path": config.realesrgan_backend_path,
+            "model": config.upscaler_model, "scale": config.upscaler_scale,
+            "tile_size": args.tile_size, "tile_padding": config.tile_padding,
+        }
         try:
-            smoke_frame(args.input, args.output, {
-                "backend_path": config.realesrgan_backend_path,
-                "model": config.upscaler_model, "scale": config.upscaler_scale,
-                "tile_size": args.tile_size, "tile_padding": config.tile_padding,
-            }, require_cuda=args.require_cuda)
+            if args.command == "smoke-compare":
+                smoke_compare(args.input, args.output_dir, options, scales=args.scales,
+                              strengths=args.strengths, require_cuda=args.require_cuda,
+                              contact_sheet=args.contact_sheet, crop=args.crop)
+            else:
+                options["scale"] = args.scale if args.scale is not None else config.upscaler_scale
+                options["restoration_strength"] = args.strength
+                smoke_frame(args.input, args.output, options, require_cuda=args.require_cuda)
         except (UpscalingError, OSError, ValueError) as exc:
             raise SystemExit(f"Smoke test failed: {exc}") from exc
         return
