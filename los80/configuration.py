@@ -49,7 +49,8 @@ class AppConfig:
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
     upscaler_model: str = "RealESRGAN_x4plus"
-    upscaler_scale: int = 4
+    upscaler_backend: str = "ffmpeg"
+    upscaler_scale: int = 2
     upscaler_output_format: str = "png"
     upscaler_verbose: bool = False
     realesrgan_backend_path: str | None = None
@@ -125,6 +126,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             config.realesrgan_backend_path = ai_upscaling["backend_path"]
         if isinstance(ai_upscaling, dict):
             for yaml_key, attribute in {
+                "backend": "upscaler_backend",
                 "scale": "upscaler_scale",
                 "output_format": "upscaler_output_format",
                 "verbose": "upscaler_verbose",
@@ -140,4 +142,6 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             }.items():
                 if yaml_key in translation:
                     setattr(config, attribute, translation[yaml_key])
+    if config.upscaler_backend not in {"ffmpeg", "auto", "realesrgan"}:
+        raise ValueError(f"Unsupported upscaler_backend: {config.upscaler_backend}")
     return config

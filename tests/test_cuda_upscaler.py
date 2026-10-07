@@ -30,7 +30,7 @@ def test_cuda_failure_never_uses_ncnn(tmp_path, monkeypatch):
         raise u.UpscalingError('CUDA setup failed')
     monkeypatch.setattr(u.TorchRealESRGANBackend, 'prepare', fail)
     with pytest.raises(u.UpscalingError, match='CUDA setup failed'):
-        u.AIUpscaler().upscale(tmp_path / 'in.mp4', tmp_path / 'out.mp4')
+        u.AIUpscaler().upscale(tmp_path / 'in.mp4', tmp_path / 'out.mp4', {'backend': 'realesrgan'})
 
 
 @pytest.mark.parametrize('requested,supported,capability,expected', [

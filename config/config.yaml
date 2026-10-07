@@ -63,6 +63,8 @@ translation:
   target_language: "en"
 
 # AI video-upscaling settings.
+upscaler_backend: ffmpeg
+upscaler_scale: 2
 ai_upscaling:
   # Enable AI upscaling as part of the restoration pipeline when true.
   enabled: true
@@ -70,7 +72,7 @@ ai_upscaling:
   # managed cache (~/.cache locally or /content/.cache in Google Colab).
   backend_path: null
   # Options supported by the Real-ESRGAN NCNN v0.2.5.0 executable.
-  scale: 4
+  scale: 2
   output_format: "png"
   verbose: false
   # Requested maximum output width in pixels.

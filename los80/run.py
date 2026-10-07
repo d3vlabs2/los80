@@ -125,7 +125,7 @@ def main() -> None:
         if failed:
             raise SystemExit(1)
         return
-    if args.command is None and not cuda_available():
+    if args.command is None and config.upscaler_backend == "realesrgan" and not cuda_available():
         try:
             RealESRGANRuntime(getattr(config, "realesrgan_backend_path", None)).ensure()
         except RealESRGANRuntimeError as exc:

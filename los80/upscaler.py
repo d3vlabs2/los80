@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import json
 import os
 import shutil
@@ -16,6 +17,47 @@ from los80.realesrgan_runtime import RealESRGANRuntime, RealESRGANRuntimeError
 
 class UpscalingError(RuntimeError):
     pass
+
+
+class FFmpegBackend:
+    """Scale video in one FFmpeg pass, without neural models or frame caches."""
+
+    def upscale(self, input_path: Path, output_path: Path, config: dict[str, object]) -> Path:
+        try:
+            scale = float(config.get("scale", 2))
+        except (TypeError, ValueError) as exc:
+            raise UpscalingError("FFmpeg scale must be a positive number") from exc
+        if not math.isfinite(scale) or scale <= 0:
+            raise UpscalingError("FFmpeg scale must be a positive number")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = output_path.with_name(output_path.stem + ".partial" + output_path.suffix)
+        codec = str(config.get("intermediate_codec", "libx264"))
+        command = [
+            str(config.get("ffmpeg_binary", "ffmpeg")), "-nostdin", "-v", "error", "-y",
+            "-i", str(input_path), "-map", "0:v:0", "-map", "0:a?", "-map", "0:s?",
+            "-map_metadata", "0", "-map_chapters", "0",
+            "-vf", f"scale=iw*{scale:g}:ih*{scale:g}:flags=lanczos", "-c:v", codec,
+        ]
+        if codec == "libx264":
+            command.extend(["-crf", str(config.get("intermediate_crf", 0)),
+                            "-preset", str(config.get("intermediate_preset", "fast"))])
+        command.extend(["-c:a", "copy", "-c:s", "copy", "-fps_mode", "passthrough",
+                        "-enc_time_base", "-1", str(temporary)])
+        try:
+            completed = subprocess.run(command, check=False, capture_output=True, text=True)
+            if completed.returncode != 0:
+                message = completed.stderr.strip() or completed.stdout.strip() or "unknown error"
+                raise UpscalingError(f"FFmpeg upscaling failed: {message}")
+            if not temporary.is_file() or temporary.stat().st_size == 0:
+                raise UpscalingError(f"FFmpeg did not produce upscaled video: {output_path}")
+            if config.get("output_validator"):
+                config["output_validator"](temporary)
+            temporary.replace(output_path)
+        except OSError as exc:
+            raise UpscalingError(f"FFmpeg upscaling failed: {exc}") from exc
+        finally:
+            temporary.unlink(missing_ok=True)
+        return output_path
 
 
 class RealESRGANBackend:
@@ -315,7 +357,8 @@ class AIUpscaler:
             self.logger.info("Using existing upscaled intermediate %s", output_file)
             return output_file
 
-        backend_cls = self.backend_cls or select_backend()
+        config = config or {}
+        backend_cls = self.backend_cls or select_backend(str(config.get("backend", "ffmpeg")))
         backend = backend_cls(self.logger) if issubclass(backend_cls, RealESRGANBackend) else backend_cls()
         if hasattr(backend, "upscale"):
             self.logger.info("Using %s backend", backend_cls.__name__)
@@ -335,7 +378,12 @@ def cuda_available() -> bool:
     return bool(torch.cuda.is_available())
 
 
-def select_backend():
+def select_backend(backend: str = "realesrgan"):
+    # Image and motion smoke callers retain their explicit neural selection.
+    if backend in {"ffmpeg", "auto"}:
+        return FFmpegBackend
+    if backend != "realesrgan":
+        raise UpscalingError(f"Unsupported upscaler backend: {backend}")
     # Never silently fall back to Vulkan after a CUDA inference/setup failure.
     return TorchRealESRGANBackend if cuda_available() else RealESRGANBackend
 

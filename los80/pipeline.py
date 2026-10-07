@@ -184,9 +184,10 @@ class Pipeline:
                     "deinterlace": recommendations.get("deinterlace", False),
                 }
                 upscaler_config = {
+                    "backend": getattr(self.config, "upscaler_backend", "ffmpeg"),
                     "backend_path": getattr(self.config, "realesrgan_backend_path", None),
                     "model": recommendations.get("model", getattr(self.config, "upscaler_model", "RealESRGAN_x4plus")),
-                    "scale": getattr(self.config, "upscaler_scale", 4),
+                    "scale": getattr(self.config, "upscaler_scale", 2),
                     "output_format": getattr(self.config, "upscaler_output_format", "png"),
                     "verbose": getattr(self.config, "upscaler_verbose", False),
                     "target_width": getattr(self.config, "target_width", 3840),
@@ -197,7 +198,9 @@ class Pipeline:
                     "denoise": recommendations.get("denoise", getattr(self.config, "denoise", False)),
                     "sharpen": recommendations.get("sharpen", getattr(self.config, "sharpen", False)),
                     "deinterlace": recommendations.get("deinterlace", False),
-                    "device": self.upscaler.detect_device(),
+                    "device": (self.upscaler.detect_device()
+                               if getattr(self.config, "upscaler_backend", "ffmpeg") == "realesrgan"
+                               else "cpu"),
                     "skip_if_target_reached": getattr(self.config, "skip_if_target_reached", True),
                 }
                 if getattr(self.config, "adaptive_batching", True):
