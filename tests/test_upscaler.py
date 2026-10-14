@@ -53,6 +53,7 @@ def test_pipeline_resumes_upscaling_from_existing_intermediate(
         working_dir=str(working_dir),
         reports_dir=str(tmp_path / "reports"),
         database_path=str(tmp_path / "jobs.sqlite"),
+        upscaler_backend="realesrgan",
         max_retries=1,
         include_subtitles=False,
         include_translation=False,

@@ -64,7 +64,7 @@ def test_pipeline_skips_encoding_for_completed_stage(
     video_path.write_bytes(b"video")
     output_dir = tmp_path / "output"
     output_dir.mkdir(parents=True)
-    encoded_path = output_dir / "clip.mp4"
+    encoded_path = output_dir / "clip.mkv"
     encoded_path.write_bytes(b"encoded")
     (output_dir / "clip.es.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nHola\n", encoding="utf-8")
     (output_dir / "clip.en.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")

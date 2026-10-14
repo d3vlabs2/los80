@@ -162,47 +162,103 @@ class Pipeline:
                         else float(analysis.get("quality_score", 0))
                         >= float(getattr(self.config, "analysis_quality_threshold", 80.0))
                     )
-
                 spanish_path = Path(self.config.output_dir) / f"{video_path.stem}.es.srt"
                 english_path = Path(self.config.output_dir) / f"{video_path.stem}.en.srt"
+
+                # Production FFmpeg mode performs scaling during the final encode.
+                # Real-ESRGAN retains its intermediate upscaled-video workflow.
+                single_pass = getattr(self.config, "upscaler_backend", "ffmpeg") == "ffmpeg"
+
                 upscaled_path = working_dir / f"{video_path.stem}.upscaled{video_path.suffix}"
-                encoded_path = Path(self.config.output_dir) / f"{video_path.stem}.mp4"
+                encoded_path = Path(self.config.output_dir) / f"{video_path.stem}.mkv"
+
                 encoder_config = {
                     "codec": getattr(self.config, "encoder_codec", "libx265"),
-                    "preset": recommendations.get("encoder_preset", getattr(self.config, "encoder_preset", "medium")),
+                    "preset": recommendations.get(
+                        "encoder_preset",
+                        getattr(self.config, "encoder_preset", "medium"),
+                    ),
                     "crf": getattr(self.config, "encoder_crf", 28),
                     "bitrate": getattr(self.config, "encoder_bitrate", "0"),
-                    "audio_codec": getattr(self.config, "audio_codec", "aac"),
-                    "audio_bitrate": getattr(self.config, "audio_bitrate", "128k"),
-                    "hardware_preference": getattr(self.config, "hardware_preference", getattr(self.config, "hardware_acceleration", "auto")),
-                    "embed_subtitles": getattr(self.config, "embed_subtitles", False),
+                    "hardware_preference": getattr(
+                        self.config,
+                        "hardware_preference",
+                        getattr(self.config, "hardware_acceleration", "auto"),
+                    ),
                     "copy_metadata": getattr(self.config, "copy_metadata", True),
                     "preserve_chapters": getattr(self.config, "preserve_chapters", True),
-                    "preserve_color_space": getattr(self.config, "preserve_color_space", True),
-                    "overwrite_existing": getattr(self.config, "overwrite_existing", True),
-                    "subtitle_path": str(english_path),
+                    "preserve_color_space": getattr(
+                        self.config, "preserve_color_space", True
+                    ),
+                    "overwrite_existing": getattr(
+                        self.config, "overwrite_existing", True
+                    ),
+                    "spanish_subtitle_path": str(spanish_path),
+                    "english_subtitle_path": str(english_path),
                     "deinterlace": recommendations.get("deinterlace", False),
+
+                    # In FFmpeg production mode this makes scaling part of the
+                    # final HEVC encode instead of creating a huge intermediate.
+                    "scale": (
+                        getattr(self.config, "upscaler_scale", 2)
+                        if single_pass
+                        and not recommendations.get("skip", False)
+                        else 1
+                    ),
+                    "cq": 22,
                 }
+
                 upscaler_config = {
                     "backend": getattr(self.config, "upscaler_backend", "ffmpeg"),
-                    "backend_path": getattr(self.config, "realesrgan_backend_path", None),
-                    "model": recommendations.get("model", getattr(self.config, "upscaler_model", "RealESRGAN_x4plus")),
+                    "backend_path": getattr(
+                        self.config, "realesrgan_backend_path", None
+                    ),
+                    "model": recommendations.get(
+                        "model",
+                        getattr(
+                            self.config,
+                            "upscaler_model",
+                            "RealESRGAN_x4plus",
+                        ),
+                    ),
                     "scale": getattr(self.config, "upscaler_scale", 2),
-                    "output_format": getattr(self.config, "upscaler_output_format", "png"),
+                    "output_format": getattr(
+                        self.config, "upscaler_output_format", "png"
+                    ),
                     "verbose": getattr(self.config, "upscaler_verbose", False),
                     "target_width": getattr(self.config, "target_width", 3840),
                     "target_height": getattr(self.config, "target_height", 2160),
-                    "tile_size": recommendations.get("tile_size", getattr(self.config, "tile_size", 0)),
+                    "tile_size": recommendations.get(
+                        "tile_size",
+                        getattr(self.config, "tile_size", 0),
+                    ),
                     "tile_padding": getattr(self.config, "tile_padding", 10),
                     "face_enhance": getattr(self.config, "face_enhance", False),
-                    "denoise": recommendations.get("denoise", getattr(self.config, "denoise", False)),
-                    "sharpen": recommendations.get("sharpen", getattr(self.config, "sharpen", False)),
+                    "denoise": recommendations.get(
+                        "denoise",
+                        getattr(self.config, "denoise", False),
+                    ),
+                    "sharpen": recommendations.get(
+                        "sharpen",
+                        getattr(self.config, "sharpen", False),
+                    ),
                     "deinterlace": recommendations.get("deinterlace", False),
-                    "device": (self.upscaler.detect_device()
-                               if getattr(self.config, "upscaler_backend", "ffmpeg") == "realesrgan"
-                               else "cpu"),
-                    "skip_if_target_reached": getattr(self.config, "skip_if_target_reached", True),
+                    "device": (
+                        self.upscaler.detect_device()
+                        if getattr(
+                            self.config,
+                            "upscaler_backend",
+                            "ffmpeg",
+                        ) == "realesrgan"
+                        else "cpu"
+                    ),
+                    "skip_if_target_reached": getattr(
+                        self.config,
+                        "skip_if_target_reached",
+                        True,
+                    ),
                 }
+                
                 if getattr(self.config, "adaptive_batching", True):
                     resources = self.monitor.snapshot(working_dir)
                     upscaler_config["batch_size"] = adaptive_batch_size(
@@ -274,21 +330,78 @@ class Pipeline:
                 translation_status = self.database.get_stages(source_name).get("translation", "skipped")
                 print(f"[{source_name}] English subtitle translation: {translation_status}")
 
-                processing_input = upscaled_path
-                if recommendations.get("skip", False):
-                    processing_input = video_path
-                    self.database.mark_stage(source_name, "upscaling", "skipped", details="source already high quality")
+                processing_input = video_path
+
+                if single_pass:
+                    # FFmpeg production mode: scaling happens inside the final
+                    # HEVC encode. No giant intermediate video is created.
+                    if recommendations.get("skip", False):
+                        encoder_config["scale"] = 1
+                        details = "source already high quality"
+                    else:
+                        details = (
+                            f"single-pass {encoder_config['scale']}x Lanczos "
+                            "during final encode"
+                        )
+
+                    self.database.mark_stage(
+                        source_name,
+                        "upscaling",
+                        "skipped",
+                        details=details,
+                    )
+                    print(
+                        f"[{source_name}] upscaling: folded into final encode"
+                    )
+
+                elif recommendations.get("skip", False):
+                    self.database.mark_stage(
+                        source_name,
+                        "upscaling",
+                        "skipped",
+                        details="source already high quality",
+                    )
                     print(f"[{source_name}] upscaling: skipped")
-                elif stages.get("upscaling") != "completed" or not upscaled_path.exists():
-                    if upscaled_path.exists() and stages.get("upscaling") != "completed":
+
+                elif (
+                    stages.get("upscaling") != "completed"
+                    or not upscaled_path.exists()
+                ):
+                    if (
+                        upscaled_path.exists()
+                        and stages.get("upscaling") != "completed"
+                    ):
                         upscaled_path.unlink()
-                    self._run_stage(source_name, "upscaling", lambda: self.scheduler.submit(
-                        "gpu", f"gpu:{source_name}", self.upscaler.upscale,
-                        video_path, upscaled_path, upscaler_config).result(), details="upscaled",
-                        units=media_frames, units_name="frames")
+
+                    self._run_stage(
+                        source_name,
+                        "upscaling",
+                        lambda: self.scheduler.submit(
+                            "gpu",
+                            f"gpu:{source_name}",
+                            self.upscaler.upscale,
+                            video_path,
+                            upscaled_path,
+                            upscaler_config,
+                        ).result(),
+                        details="upscaled",
+                        units=media_frames,
+                        units_name="frames",
+                    )
+
+                    processing_input = upscaled_path
+
                 else:
-                    self.database.mark_stage(source_name, "upscaling", "completed", details="existing")
-                    print(f"[{source_name}] upscaling: completed (resume)")
+                    processing_input = upscaled_path
+                    self.database.mark_stage(
+                        source_name,
+                        "upscaling",
+                        "completed",
+                        details="existing",
+                    )
+                    print(
+                        f"[{source_name}] upscaling: completed (resume)"
+                    )
 
                 if stages.get("encoding") != "completed" or not encoded_path.exists():
                     if encoded_path.exists() and stages.get("encoding") != "completed":

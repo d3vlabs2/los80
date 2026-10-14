@@ -64,8 +64,13 @@ def test_pipeline_runs_and_tracks_scan(tmp_path: Path, monkeypatch, backend) -> 
     job = database.get_job("clip.mp4")
     assert job.status == "completed"
     assert database.get_stages("clip.mp4")["scan"] == "completed"
-    assert captured["backend"] == backend
-    assert captured["scale"] == 2
+    if backend == "ffmpeg":
+        # FFmpeg production mode folds 2x Lanczos scaling into the
+        # final encode, so the standalone upscaler must not run.
+        assert captured == {}
+    else:
+        assert captured["backend"] == backend
+        assert captured["scale"] == 2
 
 
 def test_pipeline_skips_upscale_and_hands_recommendations_to_encoder(tmp_path: Path, monkeypatch) -> None:
