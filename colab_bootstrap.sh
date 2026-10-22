@@ -23,7 +23,7 @@ test -f config/colab-production.yaml
 echo "[3/4] Checking NVIDIA/NVENC..."
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
-if ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -q hevc_nvenc; then
+if ! ffmpeg -hide_banner -encoders 2>/dev/null | grep hevc_nvenc >/dev/null; then
     echo "ERROR: FFmpeg HEVC NVENC is unavailable."
     exit 1
 fi
