@@ -1,0 +1,92 @@
+general:
+  project_name: LOS80
+  execution_environment: local
+  recursive_scan: true
+  duplicate_detection: true
+  resume: true
+google_drive:
+  input: /content/drive/MyDrive/LOS80/INPUT
+  output: /content/drive/MyDrive/LOS80/OUTPUT
+  archive: /content/drive/MyDrive/LOS80/ARCHIVE
+  logs: /content/drive/MyDrive/LOS80/LOGS
+  reports: /content/drive/MyDrive/LOS80/REPORTS
+  temp: /content/LOS80_TEMP
+database:
+  path: /content/drive/MyDrive/LOS80/los80.sqlite3
+  timeout_seconds: 30
+whisper:
+  model: medium
+  device: auto
+  compute_type: auto
+  language: es
+  beam_size: 5
+translation:
+  enabled: true
+  model: facebook/nllb-200-distilled-600M
+  device: auto
+  batch_size: 8
+  source_language: es
+  target_language: en
+upscaler_backend: ffmpeg
+upscaler_scale: 2
+ai_upscaling:
+  enabled: true
+  backend_path: null
+  scale: 2
+  output_format: png
+  verbose: false
+  target_width: 3840
+  target_height: 2160
+  batch_size: 1
+ffmpeg:
+  binary: ffmpeg
+  video_codec: libx265
+  crf: 20
+  preset: slow
+  audio_codec: aac
+  audio_bitrate: 192k
+output:
+  container: mp4
+  filename_suffix: _restored
+  preserve_directory_structure: true
+  validate: true
+  overwrite: false
+retry:
+  max_attempts: 3
+  initial_delay_seconds: 30
+  backoff_multiplier: 2.0
+logging:
+  level: INFO
+  filename: los80.log
+  console: true
+  file: true
+dashboard:
+  enabled: true
+  host: 127.0.0.1
+  port: 8080
+  refresh_interval_seconds: 5
+reports:
+  html: true
+  json: true
+  csv: true
+  filename_prefix: los80_report
+input_dir: /content/drive/MyDrive/LOS80/INPUT
+output_dir: /content/drive/MyDrive/LOS80/OUTPUT
+archive_dir: /content/drive/MyDrive/LOS80/ARCHIVE
+working_dir: /content/drive/MyDrive/LOS80/WORKING
+reports_dir: /content/drive/MyDrive/LOS80/REPORTS
+database_path: /content/drive/MyDrive/LOS80/los80.sqlite
+include_subtitles: true
+include_translation: true
+whisper_model: base
+whisper_device: cpu
+whisper_compute_type: int8
+translation_model: facebook/nllb-200-distilled-600M
+translation_device: auto
+translation_batch_size: 8
+parallel_enabled: false
+cpu_workers: 2
+io_workers: 2
+enable_duplicate_detection: false
+max_retries: 2
+job_lease_seconds: 21600

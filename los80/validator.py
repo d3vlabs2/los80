@@ -37,8 +37,21 @@ class Validator:
             probe_command = [ffprobe_path, "-v", "error", "-show_entries", "format=duration:stream=codec_type,codec_name,width,height", "-of", "json", str(encoded_file)]
             completed = subprocess.run(probe_command, check=False, capture_output=True, text=True)
             if completed.returncode == 0:
-                if codec and not completed.stdout.lower().count(codec.lower()):
-                    raise ValidationError("Encoded video codec mismatch")
+                if codec:
+                    codec_lower = codec.lower()
+                    expected_codec = (
+                        "hevc"
+                        if codec_lower in {
+                            "libx265",
+                            "hevc_nvenc",
+                            "hevc_qsv",
+                            "hevc_vaapi",
+                            "hevc_videotoolbox",
+                        }
+                        else codec_lower
+                    )
+                    if expected_codec not in completed.stdout.lower():
+                        raise ValidationError("Encoded video codec mismatch")
                 if expected_resolution:
                     width, height = expected_resolution
                     if str(width) not in completed.stdout or str(height) not in completed.stdout:
