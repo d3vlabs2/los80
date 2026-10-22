@@ -317,14 +317,11 @@ class Pipeline:
                     self.database.mark_stage(source_name, "translation", "completed", details="cache hit")
                     self.database.record_benchmark(source_name, "translation", 0, cache_hit=True)
                 elif self.config.include_translation and stages.get("translation") != "completed":
-                    if english_path.exists():
-                        self._run_stage(source_name, "translation", lambda: self.scheduler.submit(
-                            "cpu", f"cpu:translation:{source_name}", self.translation_service.translate_subtitles,
-                            spanish_path, english_path).result(), details="translated")
-                        self.database.put_cache(translation_key, fingerprint, "translation", translation_hash,
-                                                {"output": str(english_path)})
-                    else:
-                        self.database.mark_stage(source_name, "translation", "skipped", details="missing english output")
+                    self._run_stage(source_name, "translation", lambda: self.scheduler.submit(
+                        "cpu", f"cpu:translation:{source_name}", self.translation_service.translate_subtitles,
+                        spanish_path, english_path).result(), details="translated")
+                    self.database.put_cache(translation_key, fingerprint, "translation", translation_hash,
+                                            {"output": str(english_path)})
                 elif self.config.include_translation and english_path.exists():
                     self.database.mark_stage(source_name, "translation", "completed", details="existing")
                 translation_status = self.database.get_stages(source_name).get("translation", "skipped")
